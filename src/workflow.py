@@ -6,7 +6,7 @@ from typing import Literal
 from langgraph.graph import StateGraph, END
 
 from .state import AgenticRAGState
-from .agents import AgenticRAGAgents
+from .agents import AgenticRAGAgents  # This is from agents.py, not agents/ package
 from .tools.retrieval_tools import RetrievalTools
 from .config import AgenticRAGConfig
 
