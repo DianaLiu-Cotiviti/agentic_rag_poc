@@ -11,7 +11,9 @@ from .state import (
     EvidenceAssessment,
     StructuredAnswer
 )
-from .workflow import AgenticRAGWorkflow
+
+# Commenting out workflow import to avoid circular dependency issues
+# from .workflow import AgenticRAGWorkflow
 
 __all__ = [
     "AgenticRAGConfig",
@@ -20,5 +22,5 @@ __all__ = [
     "RetrievalResult",
     "EvidenceAssessment",
     "StructuredAnswer",
-    "AgenticRAGWorkflow"
+    # "AgenticRAGWorkflow"
 ]
