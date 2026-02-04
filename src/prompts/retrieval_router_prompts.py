@@ -78,41 +78,144 @@ Decide whether to apply **pre-retrieval filtering** (e.g., range routing) to nar
 
 ### 🎯 STEP 2: Query-Strategy Mapping
 
-Map each query candidate to specific retrieval strategies. Not all candidates need all strategies!
+For EACH query candidate, select THE BEST retrieval strategy from 4 options.
 
-**Mapping Guidelines:**
+## Available Retrieval Strategies (Choose ONE per query):
 
-**original query**:
-- Best for: All strategies (bm25, semantic, hybrid)
-- Reason: Direct user intent
+### Strategy 1: `hybrid` - Balanced BM25+Semantic with RRF Fusion
+**What it does**: 
+- Combines BM25 (keyword matching) + Semantic (embedding similarity)
+- Fusion happens at TOOLS layer using RRF (Reciprocal Rank Fusion)
+- Returns a single fused result set with balanced ranking
 
-**expanded query**:
-- Best for: semantic, hybrid
-- Reason: Rich terminology benefits semantic matching
-- Avoid: Pure bm25 (too long for exact matching)
+**Best for**:
+- Complex queries needing both exact terms and semantic understanding
+- General medical coding questions
+- When you want balanced precision and recall
 
-**synonym query**:
-- Best for: semantic, hybrid
-- Reason: Captures alternative phrasings
-- Avoid: Pure bm25 (different keywords may not match)
+**When to use**:
+- ✅ "What is the procedure for adjacent tissue transfer?" (needs both "adjacent tissue transfer" keywords + semantic context)
+- ✅ "Explain CPT 14301 coverage limitations" (needs CPT code match + semantic understanding of "coverage")
+- ✅ Most general queries where you're unsure
 
-**section_specific query**:
-- Best for: bm25, hybrid
-- Reason: Targets specific sections/tables with exact terms
-- Good for: Metadata matching
+**Fusion method**: RRF at tools layer (harmonic ranking)
+**Example score**: If chunk found by both BM25(0.8) and Semantic(0.6) → RRF score ≈ 0.7
 
-**constraint_focused query**:
-- Best for: semantic, hybrid
-- Reason: Conceptual constraints need semantic understanding
+---
 
-**Output Format:**
-For each query candidate, specify which strategies to use:
+### Strategy 2: `bm25` - Pure Keyword Matching
+**What it does**:
+- Traditional BM25 algorithm (term frequency + inverse document frequency)
+- Exact and fuzzy keyword matching
+- Best for precise terminology lookup
+
+**Best for**:
+- Queries with specific CPT codes, modifiers, or exact terms
+- Short queries with clear keywords
+- Looking for exact terminology matches
+
+**When to use**:
+- ✅ "CPT 14301" (exact code lookup)
+- ✅ "modifier 59" (exact modifier lookup)
+- ✅ "NCCI edits table" (specific table/section name)
+- ❌ "What are the risks?" (too conceptual, use semantic or hybrid)
+
+**Fusion method**: N/A (single method)
+**Example score**: Term frequency and document relevance
+
+---
+
+### Strategy 3: `semantic` - Pure Embedding-Based Similarity
+**What it does**:
+- Uses text embeddings (e.g., text-embedding-3-large)
+- Measures semantic similarity in vector space
+- Finds conceptually related content even with different wording
+
+**Best for**:
+- Conceptual/understanding questions
+- Questions with paraphrases or synonyms
+- When exact keywords may not appear in documents
+
+**When to use**:
+- ✅ "What are complications of skin grafts?" (conceptual, may use different medical terms)
+- ✅ "tissue transfer risks" (synonym-rich, semantic similarity important)
+- ✅ "coverage criteria for reconstructive surgery" (high-level concept)
+- ❌ "CPT 14301" (exact code, use bm25 or hybrid)
+
+**Fusion method**: N/A (single method)
+**Example score**: Cosine similarity of embeddings
+
+---
+
+### Strategy 4: `bm25_semantic` - Dual Retrieval with Score Accumulation
+**What it does**:
+- Runs BOTH BM25 AND Semantic retrieval for same query
+- Keeps BOTH result sets (no deduplication at query level)
+- Fusion happens at PLANNING layer (score accumulation, not RRF)
+- Chunks found by BOTH methods get HIGHER cumulative scores
+
+**Best for**:
+- Queries needing "double verification" (exact match + conceptual relevance)
+- Medium-complexity queries where both precision and recall matter
+- When you want to reward chunks that satisfy multiple criteria
+
+**When to use**:
+- ✅ "adjacent tissue transfer techniques" (needs exact "adjacent tissue transfer" + semantic understanding of "techniques")
+- ✅ "CPT 14301 modifier compatibility" (exact CPT + conceptual understanding of "compatibility")
+- ✅ "NCCI bundling rules for skin procedures" (exact "NCCI" + semantic "bundling rules")
+- ❌ Simple exact lookups (use bm25)
+- ❌ Pure conceptual questions (use semantic)
+
+**Fusion method**: Score accumulation at planning layer
+**Example score**: If chunk found by both BM25(0.8) and Semantic(0.6) → Final score = 1.4 (累加)
+
+**Key difference from `hybrid`**:
+- `hybrid`: RRF fusion at tools layer → Lower scores (~0.7 for same chunk)
+- `bm25_semantic`: Accumulation at planning layer → Higher scores (1.4 for same chunk)
+- Use `bm25_semantic` when you want to REWARD chunks found by both methods
+- Use `hybrid` when you want BALANCED ranking between methods
+
+---
+
+## Query Type → Strategy Mapping Guidelines
+
+**original query** (user's exact question):
+- Default: `hybrid` (balanced for most cases)
+- If contains CPT codes: `bm25` or `hybrid`
+- If very conceptual: `semantic`
+
+**expanded query** (with medical terminology):
+- Prefer: `semantic` or `hybrid`
+- Avoid: Pure `bm25` (too long for exact matching)
+
+**synonym query** (alternative phrasings):
+- Prefer: `semantic`
+- OK: `hybrid`
+- Avoid: `bm25` (different keywords won't match)
+
+**section_specific query** (targets specific sections/tables):
+- Prefer: `bm25` or `bm25_semantic`
+- Good for: Exact section/table names
+
+**constraint_focused query** (NCCI rules, coverage criteria):
+- Prefer: `bm25_semantic` (exact rules + conceptual understanding)
+- OK: `hybrid`
+
+---
+
+## Output Format:
+For each query candidate, specify which strategy to use:
 ```
 query_strategy_mapping: [
   {{
-    "query_index": 0,  # Index in query_candidates
-    "strategies": ["bm25", "semantic"],  # Which strategies for this query
-    "reasoning": "Original query benefits from both exact and semantic matching"
+    "query_index": 0,
+    "strategy": "hybrid",  # ONE strategy: hybrid | bm25 | semantic | bm25_semantic
+    "reasoning": "Complex query needs balanced keyword and semantic matching"
+  }},
+  {{
+    "query_index": 1,
+    "strategy": "bm25",
+    "reasoning": "Contains specific CPT code, pure keyword matching most effective"
   }},
   ...
 ]
@@ -148,237 +251,192 @@ Set specific parameters for each retrieval strategy.
 - **semantic_weight**: Weight for semantic scores (0.0-1.0, default: 0.5)
   * Must sum to 1.0 with bm25_weight
 
-### 🔀 STEP 4: Result Fusion Strategy
+### 🔀 STEP 4: Result Aggregation Strategy
 
-Decide how to combine results from multiple queries and strategies.
+All query results will be aggregated using score accumulation at the Planning layer.
 
-**Fusion Methods:**
+**How it works**:
+1. Each query executes its assigned strategy (hybrid/bm25/semantic/bm25_semantic)
+2. Apply query weights (from Query Planner) to each result
+3. Apply range boost (1.5x) to chunks matching CPT code range routing
+4. Aggregate all results: chunks found by multiple queries get cumulative scores
+5. Sort by final score and return Top-K
 
-**RRF (Reciprocal Rank Fusion)** - Default, recommended
-- Best for: Most use cases
-- How: Combines rankings from different sources
-- Parameter: rrf_k (default: 60, higher = less aggressive fusion)
-
-**Weighted Sum**
-- Best for: When some queries are much more important
-- How: Sum scores weighted by query candidate weights
-- Uses query_candidate.weight directly
-
-**Cascade**
-- Best for: When one strategy is clearly primary
-- How: Start with Strategy A, augment with Strategy B if insufficient
-- Example: Start with range_routing, add semantic if < 10 results
-
-**Parallel with Deduplication**
-- Best for: Maximum coverage
-- How: Run all strategies, deduplicate by chunk_id, keep highest score
-
-**Recommended Fusion:**
-- Simple questions: RRF (all queries equal weight)
-- Medium questions: Weighted RRF (use query candidate weights)
-- Complex questions: Parallel with deduplication + RRF
-
-**Output:**
+**Score Formula**:
 ```
-fusion_strategy: "weighted_rrf"
+final_score(chunk) = Σ (initial_score_i × query_weight_i × range_boost_i)
+```
+
+**Multi-retrieval is a feature**:
+- If chunk found by 3 queries → score = score1 + score2 + score3
+- Higher score = more confidence (multiple perspectives agree)
+
+**Fusion Parameters**:
+```
 fusion_parameters: {{
-  "rrf_k": 60,
-  "use_query_weights": true,
-  "boost_range_results": 1.5  # Boost chunks from range routing
+  "boost_range_results": 1.5  # Boost factor for range-routed chunks (1.0-2.0)
 }}
 ```
 
-### 📊 STEP 5: Execution Order & Parallelization
+**Recommended boost values**:
+- Simple queries with exact CPT codes: 1.3-1.5
+- Medium complexity: 1.5
+- Complex multi-code queries: 1.5-1.8
 
-Define the execution order and which operations can run in parallel.
-
-**Execution Patterns:**
-
-**Sequential (Conservative)**
-```
-1. Range routing (pre-filter)
-2. BM25 on filtered chunks
-3. Semantic on filtered chunks
-4. Fuse results
-```
-- Pros: Each step uses filtered space, efficient
-- Cons: Slower total time
-- Best for: Debugging, clear attribution
-
-**Parallel (Aggressive)**
-```
-1. Range routing (pre-filter)
-2. Parallel:
-   - BM25 on all query candidates
-   - Semantic on all query candidates
-3. Fuse all results
-```
-- Pros: Fastest total time, maximum coverage
-- Cons: More token usage if retrying
-- Best for: Production, complex queries
-
-**Hybrid (Recommended)**
-```
-1. Range routing (pre-filter)
-2. For each query candidate in parallel:
-   - Run assigned strategies (from Step 2)
-3. Fuse results with RRF
-```
-- Pros: Balanced speed and efficiency
-- Cons: Requires good query-strategy mapping
-- Best for: Most use cases
-
-**Output:**
-```
-execution_plan: {{
-  "mode": "parallel",  # sequential | parallel | hybrid
-  "steps": [
-    {{"stage": "pre_filter", "action": "range_routing", "parallel": false}},
-    {{"stage": "retrieval", "action": "multi_query_search", "parallel": true}},
-    {{"stage": "fusion", "action": "rrf_fusion", "parallel": false}}
-  ]
-}}
-```
-
-### 💭 STEP 6: Reasoning
+---
 
 Provide a concise 2-3 sentence explanation covering:
 1. Why you chose this pre-filtering strategy
-2. How you mapped queries to retrieval strategies
-3. Why this fusion strategy is optimal for this query
+### 💭 STEP 5: Reasoning
+
+Provide a concise 2-3 sentence explanation covering:
+1. Why you chose this pre-filtering strategy (range routing or not)
+2. How you mapped each query to its retrieval strategy
+3. Why the selected strategies are optimal for this question
 
 ## Decision Examples
 
-**Example 1: Simple Definition Query**
+**Example 1: Simple CPT Code Lookup**
+```
 Question: "What is CPT 14301?"
-Strategies: ["range_routing", "semantic"]
-Query Candidates: [original, expanded, synonym]
+Query Candidates: 
+  1. [original] "What is CPT 14301?" (weight: 1.0)
+  2. [expanded] "What is the procedure code CPT 14301 for adjacent tissue transfer?" (weight: 0.8)
+```
 
-→ pre_filtering: {{
-  "apply_range_routing": true,
-  "range_filter_cpt_codes": ["14301"],
-  "range_filter_limit": 200
+→ **Decision**:
+```json
+{{
+  "pre_filtering": {{
+    "apply_range_routing": true,
+    "range_filter_cpt_codes": ["14301"],
+    "range_filter_limit": 200
+  }},
+  "query_strategy_mapping": [
+    {{
+      "query_index": 0,
+      "strategy": "hybrid",
+      "reasoning": "Original query needs both exact CPT code matching and semantic understanding of definition"
+    }},
+    {{
+      "query_index": 1,
+      "strategy": "semantic",
+      "reasoning": "Expanded query with full terminology is best for semantic matching"
+    }}
+  ],
+  "retrieval_parameters": {{
+    "bm25_top_k": 20,
+    "semantic_top_k": 20,
+    "hybrid_top_k": 20,
+    "hybrid_bm25_weight": 0.5,
+    "hybrid_semantic_weight": 0.5
+  }},
+  "fusion_parameters": {{
+    "boost_range_results": 1.5
+  }},
+  "reasoning": "Simple definitional query with specific CPT code 14301 requires range routing as pre-filter to narrow search space. Original query uses hybrid strategy for balanced exact+semantic matching. Expanded query uses pure semantic for rich terminology matching. Multi-query aggregation ensures comprehensive coverage."
 }}
-→ query_strategy_mapping: [
-  {{"query_index": 0, "strategies": ["semantic"], "reasoning": "Original question for direct semantic match"}},
-  {{"query_index": 1, "strategies": ["semantic"], "reasoning": "Expanded query with full terminology for semantic"}},
-  {{"query_index": 2, "strategies": ["semantic"], "reasoning": "Synonym variant for alternative phrasings"}}
-]
-→ retrieval_parameters: {{
-  "semantic": {{"top_k": 15, "similarity_threshold": 0.0}}
-}}
-→ fusion_strategy: "rrf"
-→ fusion_parameters: {{"rrf_k": 60, "use_query_weights": true, "boost_range_results": 1.3}}
-→ execution_plan: {{
-  "mode": "hybrid",
-  "steps": [
-    {{"stage": "pre_filter", "action": "range_routing"}},
-    {{"stage": "retrieval", "action": "semantic_search_parallel"}},
-    {{"stage": "fusion", "action": "rrf_fusion"}}
-  ]
-}}
-→ reasoning: "Simple definitional query with specific CPT code requires range routing to CPT 14000 section as pre-filter. All three query candidates use semantic search only (no exact matching needed). RRF fusion with slight boost for range-routed chunks ensures section-relevant results are prioritized."
+```
+
+---
 
 **Example 2: Modifier Compatibility Question**
+```
 Question: "Is modifier 59 allowed with CPT 14301?"
-Strategies: ["range_routing", "bm25", "semantic"]
-Query Candidates: [original, expanded, section_specific, synonym]
+Query Candidates:
+  1. [original] "Is modifier 59 allowed with CPT 14301?" (weight: 1.0)
+  2. [expanded] "NCCI modifier 59 compatibility rules for CPT 14301 adjacent tissue transfer" (weight: 0.9)
+  3. [section_specific] "CPT 14301 modifier table" (weight: 0.7)
+```
 
-→ pre_filtering: {{
-  "apply_range_routing": true,
-  "range_filter_cpt_codes": ["14301"],
-  "range_filter_limit": 300
-}}
-→ query_strategy_mapping: [
-  {{"query_index": 0, "strategies": ["bm25", "semantic"], "reasoning": "Original query needs both exact and semantic matching"}},
-  {{"query_index": 1, "strategies": ["semantic"], "reasoning": "Expanded query with full NCCI context for semantic understanding"}},
-  {{"query_index": 2, "strategies": ["bm25"], "reasoning": "Section-specific query targets modifier tables with exact terms"}},
-  {{"query_index": 3, "strategies": ["semantic"], "reasoning": "Synonym variant for conceptual matching"}}
-]
-→ retrieval_parameters: {{
-  "bm25": {{"top_k": 20, "boost_exact_match": true}},
-  "semantic": {{"top_k": 20, "similarity_threshold": 0.0}}
-}}
-→ fusion_strategy: "weighted_rrf"
-→ fusion_parameters: {{"rrf_k": 60, "use_query_weights": true, "boost_range_results": 1.5}}
-→ execution_plan: {{
-  "mode": "parallel",
-  "steps": [
-    {{"stage": "pre_filter", "action": "range_routing"}},
-    {{"stage": "retrieval", "action": "multi_strategy_parallel"}},
-    {{"stage": "fusion", "action": "weighted_rrf_fusion"}}
-  ]
-}}
-→ reasoning: "Modifier compatibility requires both exact matches (for 'modifier 59', 'CPT 14301' terms) and semantic understanding (for policy context). Range routing pre-filters to CPT 14000 section. Original query uses both BM25+semantic, section_specific targets tables with BM25, others use semantic. Parallel execution with weighted RRF balances exact and conceptual matches."
-
-**Example 3: Complex Policy Question**
-Question: "Under what circumstances can CPT 14301 be billed separately when performed with complex repair on the same anatomical region, and what modifiers should be used?"
-Strategies: ["range_routing", "hybrid"]
-Query Candidates: [original, expanded, constraint_focused, section_specific, synonym]
-
-→ pre_filtering: {{
-  "apply_range_routing": true,
-  "range_filter_cpt_codes": ["14301"],
-  "range_filter_limit": 500
-}}
-→ query_strategy_mapping: [
-  {{"query_index": 0, "strategies": ["hybrid"], "reasoning": "Original complex query needs balanced exact+semantic"}},
-  {{"query_index": 1, "strategies": ["hybrid"], "reasoning": "Expanded with full terminology for comprehensive matching"}},
-  {{"query_index": 2, "strategies": ["hybrid"], "reasoning": "Constraint-focused on bundling rules needs both exact and conceptual"}},
-  {{"query_index": 3, "strategies": ["hybrid"], "reasoning": "Section-specific for modifier guidance"}},
-  {{"query_index": 4, "strategies": ["semantic"], "reasoning": "Synonym variant for alternative policy phrasings"}}
-]
-→ retrieval_parameters: {{
-  "hybrid": {{
-    "top_k": 25,
-    "bm25_weight": 0.5,
-    "semantic_weight": 0.5
+→ **Decision**:
+```json
+{{
+  "pre_filtering": {{
+    "apply_range_routing": true,
+    "range_filter_cpt_codes": ["14301"],
+    "range_filter_limit": 300
   }},
-  "semantic": {{"top_k": 20, "similarity_threshold": 0.0}}
+  "query_strategy_mapping": [
+    {{
+      "query_index": 0,
+      "strategy": "bm25_semantic",
+      "reasoning": "Original query needs exact 'modifier 59' AND 'CPT 14301' matching plus semantic understanding of 'allowed'"
+    }},
+    {{
+      "query_index": 1,
+      "strategy": "semantic",
+      "reasoning": "Expanded query with NCCI terminology benefits from semantic similarity"
+    }},
+    {{
+      "query_index": 2,
+      "strategy": "bm25",
+      "reasoning": "Section-specific query targets exact table/section names with BM25"
+    }}
+  ],
+  "retrieval_parameters": {{
+    "bm25_top_k": 20,
+    "semantic_top_k": 20,
+    "hybrid_top_k": 20,
+    "hybrid_bm25_weight": 0.5,
+    "hybrid_semantic_weight": 0.5
+  }},
+  "fusion_parameters": {{
+    "boost_range_results": 1.5
+  }},
+  "reasoning": "Modifier compatibility query requires range routing to CPT 14301 section. Original query uses bm25_semantic to reward chunks with both exact modifier/code terms AND semantic relevance. Expanded query uses semantic for NCCI terminology understanding. Section-specific query uses BM25 for exact table name matching. Combined results ensure comprehensive modifier rule coverage."
 }}
-→ fusion_strategy: "parallel_with_dedup"
-→ fusion_parameters: {{"rrf_k": 60, "use_query_weights": true, "boost_range_results": 1.4}}
-→ execution_plan: {{
-  "mode": "parallel",
-  "steps": [
-    {{"stage": "pre_filter", "action": "range_routing"}},
-    {{"stage": "retrieval", "action": "multi_query_hybrid_parallel"}},
-    {{"stage": "fusion", "action": "rrf_dedup_fusion"}}
-  ]
-}}
-→ reasoning: "Complex multi-part question with 5 query candidates requires comprehensive retrieval. Range routing pre-filters to larger set (500) for complex question. Most queries use hybrid strategy for balanced exact+semantic matching, maximizing coverage of both specific terms and conceptual policy context. Parallel execution with deduplication ensures diverse results from all angles."
+```
 
-**Example 4: PTP Question (Two CPT Codes)**
-Question: "Can CPT 14301 and 27700 be billed together?"
-Strategies: ["range_routing", "bm25", "semantic"]
-Query Candidates: [original, expanded, section_specific, synonym]
+---
 
-→ pre_filtering: {{
-  "apply_range_routing": true,
-  "range_filter_cpt_codes": ["14301", "27700"],
-  "range_filter_limit": 400
+**Example 3: Conceptual Coverage Question**
+```
+Question: "What are the coverage criteria for tissue transfer procedures?"
+Query Candidates:
+  1. [original] "What are the coverage criteria for tissue transfer procedures?" (weight: 1.0)
+  2. [expanded] "Medical necessity criteria coverage limitations tissue transfer adjacent flap procedures" (weight: 0.8)
+  3. [synonym] "reimbursement requirements skin graft procedures" (weight: 0.6)
+```
+
+→ **Decision**:
+```json
+{{
+  "pre_filtering": {{
+    "apply_range_routing": false,
+    "range_filter_cpt_codes": [],
+    "range_filter_limit": 300
+  }},
+  "query_strategy_mapping": [
+    {{
+      "query_index": 0,
+      "strategy": "hybrid",
+      "reasoning": "Original query benefits from balanced keyword (coverage, criteria) and semantic matching"
+    }},
+    {{
+      "query_index": 1,
+      "strategy": "semantic",
+      "reasoning": "Expanded query with rich medical terminology is ideal for semantic similarity"
+    }},
+    {{
+      "query_index": 2,
+      "strategy": "semantic",
+      "reasoning": "Synonym query with alternative phrasings requires semantic understanding"
+    }}
+  ],
+  "retrieval_parameters": {{
+    "bm25_top_k": 20,
+    "semantic_top_k": 20,
+    "hybrid_top_k": 20,
+    "hybrid_bm25_weight": 0.5,
+    "hybrid_semantic_weight": 0.5
+  }},
+  "fusion_parameters": {{
+    "boost_range_results": 1.3
+  }},
+  "reasoning": "Conceptual coverage question without specific CPT codes does not require range routing pre-filter. Original query uses hybrid for balanced retrieval. Both expanded and synonym queries use semantic strategy to capture conceptual understanding across varying terminologies. Multi-query semantic approach ensures comprehensive coverage criteria retrieval."
 }}
-→ query_strategy_mapping: [
-  {{"query_index": 0, "strategies": ["bm25", "semantic"], "reasoning": "Original PTP question for both exact and semantic"}},
-  {{"query_index": 1, "strategies": ["semantic"], "reasoning": "Expanded with both code descriptions for semantic"}},
-  {{"query_index": 2, "strategies": ["bm25"], "reasoning": "Section-specific targets PTP tables with exact terms"}},
-  {{"query_index": 3, "strategies": ["semantic"], "reasoning": "Synonym for conceptual billing compatibility"}}
-]
-→ retrieval_parameters: {{
-  "bm25": {{"top_k": 20, "boost_exact_match": true}},
-  "semantic": {{"top_k": 20, "similarity_threshold": 0.0}}
-}}
-→ fusion_strategy: "weighted_rrf"
-→ fusion_parameters: {{"rrf_k": 60, "use_query_weights": true, "boost_range_results": 1.6}}
-→ execution_plan: {{
-  "mode": "parallel",
-  "steps": [
-    {{"stage": "pre_filter", "action": "range_routing_multi_code"}},
-    {{"stage": "retrieval", "action": "multi_strategy_parallel"}},
-    {{"stage": "fusion", "action": "weighted_rrf_fusion"}}
-  ]
-}}
-→ reasoning: "PTP question with two CPT codes requires range routing to both code sections (14xxx and 27xxx). Section-specific query uses BM25 to find exact PTP table entries, while other queries use semantic to understand billing context. Higher boost (1.6) for range results ensures code-specific rules are prioritized over general guidelines."
+```
 
 ## Now Create Retrieval Execution Plan
 
@@ -396,7 +454,11 @@ def build_tool_calling_prompt(
     """
     Build prompt for LLM-driven tool calling mode
     
-    This prompt guides the LLM to call retrieval tools directly using OpenAI function calling.
+    Tool Calling模式：LLM根据每一步的结果动态决定下一个tool call
+    - 可以看到中间结果
+    - 可以根据结果调整策略
+    - 可以迭代优化
+    - 成本高（5-15次LLM调用），但质量最高
     
     Args:
         question: Original user query
@@ -418,7 +480,7 @@ def build_tool_calling_prompt(
     
     return f"""You are an intelligent Retrieval Agent for a medical coding RAG system.
 
-Your mission is to **USE THE AVAILABLE TOOLS** to retrieve relevant information based on the user's question.
+Your mission is to **DYNAMICALLY USE RETRIEVAL TOOLS** to find the most relevant information.
 
 ## Input Information
 
@@ -430,108 +492,236 @@ Your mission is to **USE THE AVAILABLE TOOLS** to retrieve relevant information 
 **Query Candidates ({len(query_candidates)}):**
 {candidates_str}
 
-## Available Tools
+## Available Retrieval Tools
 
-You have access to the following retrieval tools:
+You have access to these tools. **Use them iteratively** based on results:
 
-1. **range_routing(cpt_code, limit)**: Pre-filter chunks by CPT code range
-   - Use when: Question contains specific CPT codes
-   - Parameters: cpt_code (int), limit (int, default: 300)
-   - Returns: Set of chunk IDs in that CPT range
+### 1. `range_routing(cpt_code, limit)` - Pre-filter by CPT Code Range
+**When to use**: Question contains specific CPT codes
+**Parameters**: 
+- cpt_code (int): The CPT code to filter by
+- limit (int, default: 300): Max chunks to retrieve
+**Returns**: Set of chunk IDs in that CPT range
+**Strategy**: Use FIRST if CPT codes present
 
-2. **bm25_search(query, top_k, boost_exact_match)**: Keyword-based search
-   - Use when: Need exact term matching
-   - Parameters: query (str), top_k (int, default: 20), boost_exact_match (bool, default: True)
-   - Returns: List of retrieval results with scores
+---
 
-3. **semantic_search(query, top_k, similarity_threshold)**: Vector-based semantic search
-   - Use when: Need conceptual understanding
-   - Parameters: query (str), top_k (int, default: 20), similarity_threshold (float, default: 0.0)
-   - Returns: List of retrieval results with scores
+### 2. `bm25_search(query, top_k)` - Pure Keyword Matching
+**When to use**: 
+- Exact CPT codes, modifiers, or specific terms
+- Short queries with clear keywords
+- Looking for exact table/section names
+**Parameters**:
+- query (str): The search query
+- top_k (int, default: 20): Number of results
+**Returns**: List of results ranked by BM25 score
+**Strategy**: Best for exact matching
 
-4. **hybrid_search(query, top_k, bm25_weight, semantic_weight)**: Combined BM25 + semantic
-   - Use when: Need balanced exact + conceptual matching
-   - Parameters: query (str), top_k (int, default: 20), bm25_weight (float, default: 0.5), semantic_weight (float, default: 0.5)
-   - Returns: List of retrieval results with scores
+**Good queries for BM25**:
+- ✅ "CPT 14301"
+- ✅ "modifier 59"
+- ✅ "NCCI edits table"
+- ❌ "What are the risks?" (too conceptual)
 
-5. **rrf_fusion(result_ids, rrf_k, top_k)**: Fuse multiple result sets
-   - Use when: Have results from multiple searches to combine
-   - Parameters: result_ids (list of str), rrf_k (int, default: 60), top_k (int, default: 20)
-   - Returns: Fused and deduplicated results
+---
 
-## Execution Strategy
+### 3. `semantic_search(query, top_k)` - Pure Semantic Similarity
+**When to use**:
+- Conceptual/understanding questions
+- Queries with paraphrases or synonyms
+- When exact keywords may not appear in docs
+**Parameters**:
+- query (str): The search query
+- top_k (int, default: 20): Number of results
+**Returns**: List of results ranked by embedding similarity
+**Strategy**: Best for conceptual queries
 
-**STEP 1: Analyze Query Characteristics**
-- Does it contain specific CPT codes? → Consider range_routing first
-- What's the primary intent? definition/compatibility/policy
-- Which strategies are recommended? {strategies_str}
+**Good queries for Semantic**:
+- ✅ "What are complications of skin grafts?"
+- ✅ "tissue transfer risks"
+- ✅ "coverage criteria for reconstructive surgery"
+- ❌ "CPT 14301" (exact code, use bm25)
 
-**STEP 2: Plan Tool Calls**
+---
 
-**For queries with CPT codes:**
-1. Call range_routing(cpt_code) for each CPT code mentioned
-2. Then call appropriate search methods (bm25/semantic/hybrid)
-3. Finally call rrf_fusion to combine results
+### 4. `hybrid_search(query, top_k, bm25_weight, semantic_weight)` - Balanced BM25+Semantic
+**When to use**:
+- Complex queries needing both exact terms and semantic understanding
+- General questions where you're unsure
+- Most medical coding questions
+**Parameters**:
+- query (str): The search query
+- top_k (int, default: 20): Number of results
+- bm25_weight (float, default: 0.5): Weight for BM25 (0.0-1.0)
+- semantic_weight (float, default: 0.5): Weight for semantic (0.0-1.0)
+**Returns**: List of results fused with RRF at tools layer
+**Strategy**: Default safe choice, internally does BM25+Semantic+RRF
 
-**For queries without CPT codes:**
-1. Call appropriate search methods for each query candidate
-2. Use different strategies based on query type:
-   - original: hybrid (balanced)
-   - expanded: semantic (rich terminology)
-   - section_specific: bm25 (exact matching)
-   - constraint_focused: semantic (conceptual)
-3. Call rrf_fusion to combine results
+**Good queries for Hybrid**:
+- ✅ "What is the procedure for adjacent tissue transfer?"
+- ✅ "Explain CPT 14301 coverage limitations"
+- ✅ Most general queries
 
-**STEP 3: Execute Tool Calls**
-- Call tools in logical order
-- Use results from previous tools to inform next calls
-- Track result_ids for fusion
+**Adjust weights**:
+- Prefer exact matching: bm25_weight=0.6, semantic_weight=0.4
+- Prefer semantic: bm25_weight=0.4, semantic_weight=0.6
 
-**STEP 4: Fuse and Return**
-- Call rrf_fusion with all collected result_ids
-- This will be your final output
+---
+
+## 4 Retrieval Strategies You Can Implement
+
+### Strategy 1: `hybrid` - Use hybrid_search tool
+- **One tool call**: `hybrid_search(query, top_k=20)`
+- **Fusion**: Happens internally (BM25+Semantic+RRF)
+- **Best for**: Most general queries
+
+### Strategy 2: `bm25` - Use bm25_search tool
+- **One tool call**: `bm25_search(query, top_k=20)`
+- **Best for**: Exact code/modifier lookups
+
+### Strategy 3: `semantic` - Use semantic_search tool
+- **One tool call**: `semantic_search(query, top_k=20)`
+- **Best for**: Conceptual queries
+
+### Strategy 4: `bm25_semantic` - Call BOTH bm25_search AND semantic_search
+- **Two tool calls**:
+  1. `bm25_search(query, top_k=20)` → get result_set_1
+  2. `semantic_search(query, top_k=20)` → get result_set_2
+- **You aggregate**: Chunks in both sets get higher scores (manual combination)
+- **Best for**: Queries needing "double verification" (exact + conceptual)
+- **When to use**:
+  - ✅ "CPT 14301 modifier compatibility" (exact CPT + conceptual "compatibility")
+  - ✅ "NCCI bundling rules for skin procedures" (exact "NCCI" + semantic "bundling")
+
+---
+
+## Your Execution Approach
+
+**ITERATIVE TOOL CALLING:**
+
+1. **Start with analysis**
+   - Does question have CPT codes? → Call `range_routing` first
+   - What's the query complexity? → Choose initial strategy
+   
+2. **Execute initial retrieval**
+   - Simple/exact query → Try `bm25_search` first
+   - Conceptual query → Try `semantic_search` first
+   - Unsure → Try `hybrid_search` (safest)
+   
+3. **Evaluate results**
+   - Check if results are relevant
+   - Check if enough results (aim for ~10-20 good chunks)
+   
+4. **Decide next step based on results**
+   - Results good? → Done, return
+   - Results not enough? → Try different strategy
+   - Results irrelevant? → Adjust query or try different method
+   
+5. **Optional: Try multiple query candidates**
+   - Each query candidate might need different strategy
+   - Combine results from multiple calls
+
+**YOU CAN ITERATE:**
+- See results → Adjust strategy → Call again
+- Try multiple query candidates with different strategies
+- Combine results manually
+
+---
+
+## Decision Tree for Strategy Selection
+
+```
+START
+  ↓
+Has CPT codes? 
+  Yes → Call range_routing(cpt_code) FIRST
+  No → Continue
+  ↓
+Query type?
+  │
+  ├─ Exact code/modifier lookup → Strategy 2: bm25_search
+  │
+  ├─ Conceptual question → Strategy 3: semantic_search
+  │
+  ├─ Complex/general question → Strategy 1: hybrid_search
+  │
+  └─ Needs double verification → Strategy 4: bm25_search + semantic_search
+  ↓
+Evaluate results
+  ↓
+Sufficient? → RETURN
+Insufficient? → Try different strategy or query candidate
+```
+
+---
 
 ## Example Execution Patterns
 
-**Example 1: Simple Definition (CPT code present)**
+**Example 1: Simple CPT Lookup (Strategy 1: hybrid)**
+```
 Question: "What is CPT 14301?"
-→ Call: range_routing(cpt_code=14301, limit=200)
-→ Call: semantic_search(query="What is CPT 14301?", top_k=15)
-→ Call: rrf_fusion(result_ids=["range_14301", "semantic_0"], top_k=20)
 
-**Example 2: Modifier Compatibility (CPT code present)**
+Step 1: range_routing(cpt_code=14301, limit=200)
+Step 2: hybrid_search("What is CPT 14301?", top_k=20)
+→ Results look good → DONE
+```
+
+**Example 2: Modifier Question (Strategy 4: bm25_semantic)**
+```
 Question: "Is modifier 59 allowed with CPT 14301?"
-→ Call: range_routing(cpt_code=14301, limit=300)
-→ Call: bm25_search(query="modifier 59 CPT 14301", top_k=20)
-→ Call: semantic_search(query="modifier 59 compatibility with adjacent tissue transfer", top_k=20)
-→ Call: rrf_fusion(result_ids=["bm25_0", "semantic_0"], top_k=20)
 
-**Example 3: PTP Question (Two CPT codes)**
+Step 1: range_routing(cpt_code=14301, limit=300)
+Step 2: bm25_search("modifier 59 CPT 14301", top_k=20)
+→ Check results... Got exact table entries but need context
+Step 3: semantic_search("modifier 59 compatibility adjacent tissue transfer", top_k=20)
+→ Got conceptual context → Combine both → DONE
+```
+
+**Example 3: Iterative Refinement**
+```
 Question: "Can CPT 14301 and 27700 be billed together?"
-→ Call: range_routing(cpt_code=14301, limit=300)
-→ Call: range_routing(cpt_code=27700, limit=300)
-→ Call: bm25_search(query="CPT 14301 27700 billed together", top_k=20)
-→ Call: semantic_search(query="adjacent tissue transfer and wound repair billing compatibility", top_k=20)
-→ Call: rrf_fusion(result_ids=["bm25_0", "semantic_0"], top_k=20)
 
-**Example 4: Conceptual Question (No CPT codes)**
-Question: "What are the guidelines for billing adjacent tissue transfers?"
-→ Call: semantic_search(query="guidelines for billing adjacent tissue transfers", top_k=20)
-→ Call: hybrid_search(query="adjacent tissue transfer coding rules", top_k=20, bm25_weight=0.4, semantic_weight=0.6)
-→ Call: rrf_fusion(result_ids=["semantic_0", "hybrid_0"], top_k=20)
+Step 1: range_routing(cpt_code=14301, limit=300)
+Step 2: range_routing(cpt_code=27700, limit=300)
+Step 3: hybrid_search("CPT 14301 27700 billed together", top_k=20)
+→ Check results... Only 5 relevant chunks, need more
+Step 4: semantic_search("adjacent tissue transfer wound repair billing compatibility", top_k=20)
+→ Got more context → Combine → DONE
+```
+
+**Example 4: Multiple Query Candidates (Mix strategies)**
+```
+Question: "What are NCCI bundling rules for tissue transfer?"
+
+Query Candidates:
+1. [original] "What are NCCI bundling rules for tissue transfer?"
+2. [section_specific] "NCCI edits table tissue transfer"
+3. [synonym] "CCI bundling policies skin flaps"
+
+Step 1: hybrid_search(query_1, top_k=20)  # General query → hybrid
+→ Check results... Good general info
+Step 2: bm25_search(query_2, top_k=15)    # Table lookup → bm25
+→ Check results... Got exact table
+Step 3: semantic_search(query_3, top_k=15) # Synonym → semantic
+→ Check results... Got related policies
+→ Combine all 3 result sets → DONE
+```
+
+---
 
 ## Your Task
 
-Based on the question and query candidates above, **CALL THE APPROPRIATE TOOLS** to retrieve relevant information.
+Based on the question and query candidates above:
+1. **Analyze** the question characteristics
+2. **Choose** initial strategy (hybrid/bm25/semantic/bm25_semantic)
+3. **Call** the appropriate tool(s)
+4. **Evaluate** results when you get them
+5. **Iterate** if needed (try different strategy/query)
+6. **Return** when you have sufficient relevant results
 
-**Important Guidelines:**
-1. Use range_routing FIRST if CPT codes are present
-2. Call search tools with different query candidates to get diverse results
-3. Use bm25 for exact matching, semantic for concepts, hybrid for balance
-4. Always finish with rrf_fusion to combine results
-5. Track result_ids carefully for fusion
+**Start by making your first tool call now!**
 
-Start by calling the first tool now!
+Remember: You can see results and adjust. Don't be afraid to try different approaches.
 """
 
 
