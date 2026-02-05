@@ -274,14 +274,39 @@ final_score(chunk) = Σ (initial_score_i × query_weight_i × range_boost_i)
 **Fusion Parameters**:
 ```
 fusion_parameters: {{
-  "boost_range_results": 1.5  # Boost factor for range-routed chunks (1.0-2.0)
+  "boost_range_results": 2.0  # Boost factor for range-routed chunks (1.0-5.0)
 }}
 ```
 
 **Recommended boost values**:
-- Simple queries with exact CPT codes: 1.3-1.5
-- Medium complexity: 1.5
-- Complex multi-code queries: 1.5-1.8
+- Simple queries with exact CPT codes: 2.0-2.5
+- Medium complexity with strong CPT focus: 2.5-3.0
+- Complex queries but CPT precision critical: 3.0-4.0
+- Maximum prioritization of pre-filtered results: 4.0-5.0
+
+**Understanding boost impact**:
+```python
+# Example: chunk found by semantic search
+# Scenario 1: chunk NOT in CPT range
+initial_score = 0.8
+boost = 1.0  # No boost
+final_score = 0.8
+
+# Scenario 2: chunk IN CPT range, boost=2.0
+initial_score = 0.8
+boost = 2.0
+final_score = 1.6  # ← 2x higher!
+
+# Scenario 3: chunk IN CPT range, boost=5.0
+initial_score = 0.8
+boost = 5.0
+final_score = 4.0  # ← 5x higher! Strong prioritization
+```
+
+**Trade-offs**:
+- Higher boost (3.0-5.0): Ensures pre-filtered chunks rank higher, but may miss relevant chunks outside CPT range
+- Lower boost (1.5-2.5): More balanced, allows high-quality chunks outside range to compete
+- Boost=1.0: No prioritization of pre-filtered chunks
 
 ---
 
@@ -449,7 +474,8 @@ def build_tool_calling_prompt(
     question_type: str,
     retrieval_strategies: list[str],
     query_candidates: list[dict],
-    question_keywords: list[str]
+    question_keywords: list[str],
+    retrieval_hints: list[str] = None
 ) -> str:
     """
     Build prompt for LLM-driven tool calling mode
@@ -466,10 +492,12 @@ def build_tool_calling_prompt(
         retrieval_strategies: Strategy list from Orchestrator
         query_candidates: Query candidates from Query Planner
         question_keywords: Extracted keywords from Orchestrator
+        retrieval_hints: Additional hints from Query Planner (optional)
         
     Returns:
         str: Complete prompt for LLM
     """
+    retrieval_hints = retrieval_hints or []
     strategies_str = ", ".join(retrieval_strategies)
     keywords_str = ", ".join(question_keywords[:10])
     
@@ -477,6 +505,11 @@ def build_tool_calling_prompt(
         f"  {i+1}. [{qc['query_type']}] (weight: {qc['weight']}) \"{qc['query']}\""
         for i, qc in enumerate(query_candidates)
     )
+    
+    hints_str = ""
+    if retrieval_hints:
+        hints_list = "\n".join(f"  - {hint}" for hint in retrieval_hints)
+        hints_str = f"\n**Retrieval Hints from Query Planner:**\n{hints_list}\n"
     
     return f"""You are an intelligent Retrieval Agent for a medical coding RAG system.
 
@@ -488,7 +521,7 @@ Your mission is to **DYNAMICALLY USE RETRIEVAL TOOLS** to find the most relevant
 **Question Type**: {question_type}
 **Recommended Strategies**: {strategies_str}
 **Keywords**: {keywords_str}
-
+{hints_str}
 **Query Candidates ({len(query_candidates)}):**
 {candidates_str}
 
