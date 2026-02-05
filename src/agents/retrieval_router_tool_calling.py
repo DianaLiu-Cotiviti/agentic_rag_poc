@@ -34,15 +34,16 @@ class ToolCallingRetrievalRouter:
     4. 汇总所有工具调用的结果
     """
     
-    def __init__(self, config, tools):
+    def __init__(self, config, tools, client=None):
         """
         Args:
             config: Configuration object with Azure OpenAI settings
             tools: RetrievalTools instance
+            client: Azure OpenAI client (optional, will use config.client if not provided)
         """
         self.config = config
         self.tools = tools
-        self.client = config.client  # Azure OpenAI client
+        self.client = client if client is not None else getattr(config, 'client', None)
         self.max_tool_iterations = 10
     
     def process(self, state: AgenticRAGState) -> dict:
@@ -61,6 +62,15 @@ class ToolCallingRetrievalRouter:
         query_candidates = state.get("query_candidates", [])
         question_keywords = state.get("question_keywords", [])
         
+        # Get retrieval hints from messages (stored by QueryPlanner)
+        messages_state = state.get("messages", [])
+        retrieval_hints = []
+        for msg in messages_state:
+            if msg.startswith("Retrieval Hints:"):
+                hint_part = msg.replace("Retrieval Hints:", "").strip()
+                retrieval_hints = [h.strip() for h in hint_part.split(";") if h.strip()]
+                break
+        
         # Build tool calling prompt
         prompt = build_tool_calling_prompt(
             question=question,
@@ -74,7 +84,8 @@ class ToolCallingRetrievalRouter:
                 }
                 for qc in query_candidates
             ],
-            question_keywords=question_keywords
+            question_keywords=question_keywords,
+            retrieval_hints=retrieval_hints
         )
         
         # Build tool definitions for OpenAI function calling
@@ -94,6 +105,15 @@ class ToolCallingRetrievalRouter:
             "hybrid_search": [],
             "rrf_fusion": []
         }
+        
+        # Initialize client if not already set
+        if not self.client:
+            from openai import AzureOpenAI
+            self.client = AzureOpenAI(
+                api_key=self.config.azure_openai_api_key,
+                api_version=self.config.azure_api_version,
+                azure_endpoint=self.config.azure_openai_endpoint
+            )
         
         # Multi-turn conversation with tool calling
         iteration = 0
@@ -160,8 +180,8 @@ class ToolCallingRetrievalRouter:
                             },
                             "limit": {
                                 "type": "integer",
-                                "description": "Maximum number of chunks to retrieve (default: 300)",
-                                "default": 300
+                                "description": "Maximum number of chunks to retrieve (default: 50)",
+                                "default": 50
                             }
                         },
                         "required": ["cpt_code"]
@@ -182,13 +202,8 @@ class ToolCallingRetrievalRouter:
                             },
                             "top_k": {
                                 "type": "integer",
-                                "description": "Number of results to retrieve (default: 20)",
-                                "default": 20
-                            },
-                            "boost_exact_match": {
-                                "type": "boolean",
-                                "description": "Whether to boost exact code/modifier matches",
-                                "default": True
+                                "description": "Number of results to retrieve (default: 50)",
+                                "default": 50
                             }
                         },
                         "required": ["query"]
@@ -209,13 +224,8 @@ class ToolCallingRetrievalRouter:
                             },
                             "top_k": {
                                 "type": "integer",
-                                "description": "Number of results to retrieve (default: 20)",
-                                "default": 20
-                            },
-                            "similarity_threshold": {
-                                "type": "number",
-                                "description": "Minimum similarity score (0.0-1.0, default: 0.0)",
-                                "default": 0.0
+                                "description": "Number of results to retrieve (default: 50)",
+                                "default": 50
                             }
                         },
                         "required": ["query"]
@@ -299,7 +309,7 @@ class ToolCallingRetrievalRouter:
         try:
             if function_name == "range_routing":
                 cpt_code = args["cpt_code"]
-                limit = args.get("limit", 300)
+                limit = args.get("limit", 50)
                 chunk_ids = self.tools.range_routing(cpt_code, limit=limit)
                 
                 result_id = f"range_{cpt_code}"
@@ -319,7 +329,7 @@ class ToolCallingRetrievalRouter:
             
             elif function_name == "bm25_search":
                 query = args["query"]
-                top_k = args.get("top_k", 20)
+                top_k = args.get("top_k", 50)
                 results = self.tools.bm25_search(query, top_k=top_k)
                 
                 result_id = f"bm25_{len(tool_results['bm25_search'])}"
@@ -339,7 +349,7 @@ class ToolCallingRetrievalRouter:
             
             elif function_name == "semantic_search":
                 query = args["query"]
-                top_k = args.get("top_k", 20)
+                top_k = args.get("top_k", 50)
                 results = self.tools.semantic_search(query, top_k=top_k)
                 
                 result_id = f"semantic_{len(tool_results['semantic_search'])}"
