@@ -1,6 +1,23 @@
 """
-Evidence Judge Agent prompts - versioned for threshold tuning
+Evidence Judge Prompts
+
+Comprehensive prompts for Evidence Quality Assessment
 """
+
+# System message for Evidence Judge
+EVIDENCE_JUDGE_SYSTEM_MESSAGE = """You are an Evidence Quality Judge for a medical coding RAG system.
+
+Your role is to critically evaluate whether retrieved evidence is SUFFICIENT and HIGH-QUALITY enough to answer the user's question.
+
+Key responsibilities:
+1. Assess if evidence covers all aspects of the question
+2. Evaluate evidence quality (specificity, relevance, accuracy)
+3. Identify contradictions or inconsistencies
+4. Determine if more retrieval is needed
+5. Provide actionable feedback for query refinement
+
+Be thorough and critical - better to request more evidence than provide incomplete answers."""
+
 
 EVIDENCE_JUDGE_PROMPTS = {
     "v1": """Evaluate if retrieved evidence is sufficient to answer the question.
@@ -78,3 +95,217 @@ THRESHOLDS = {
         "min_overall": 0.65,
     }
 }
+
+
+def build_evidence_judgment_prompt(
+    question: str,
+    question_type: str,
+    chunks_text: str,
+    retrieval_mode: str,
+    strategies_used: str,
+    total_chunks: int
+) -> str:
+    """
+    Build comprehensive evaluation prompt for Evidence Judge
+    
+    评估逻辑：
+    - 评估目标：original question（用户的原始问题）
+    - 评估证据：retrieved chunks（融合后的15-20个高分chunks）
+    - 评估方法：根据question_type判断required aspects是否被覆盖
+    
+    注意：不需要sub-queries！
+    - Sub-queries只是检索手段（用于Query Planner → Retrieval Router）
+    - Evidence Judge评估的是：这些chunks能否回答original question
+    - 不是：这些chunks能否回答每个sub-query
+    
+    Guidelines:
+    - Coverage: Does evidence cover all required aspects for this question type?
+    - Specificity: Is evidence specific to exact CPT codes/topics asked?
+    - Citation Count: How many high-quality (score > threshold) chunks?
+    - Contradiction: Any conflicting information?
+    - Missing Aspects: What specific aspects are missing (for query refinement)?
+    
+    Args:
+        question: Original user question（评估目标）
+        question_type: Question type (cpt_code_lookup, billing_compatibility, etc.)
+        chunks_text: Formatted chunks for evaluation（融合后的chunks）
+        retrieval_mode: Which retrieval mode was used
+        strategies_used: Which strategies were used
+        total_chunks: Total number of chunks retrieved
+        
+    Returns:
+        Complete evaluation prompt
+    """
+    return f"""## Question to Answer
+
+**Original Question**: {question}
+**Question Type**: {question_type}
+
+## Retrieval Information
+
+**Retrieval Mode**: {retrieval_mode}
+**Strategies Used**: {strategies_used}
+**Total Chunks Retrieved**: {total_chunks}
+
+## Retrieved Evidence
+
+{chunks_text}
+
+## Your Task
+
+Critically evaluate whether this evidence is **SUFFICIENT** to answer the original question above.
+
+**Evaluation Criteria**:
+
+### 1. Coverage Score (0.0-1.0)
+
+Does the evidence cover all aspects required for this question type?
+
+**Required Aspects by Question Type**:
+
+- **cpt_code_lookup**: 
+  • CPT code definition
+  • Anatomical location/scope
+  • Procedure description
+  • Typical usage scenarios
+  • (Optional: Modifiers, bundling rules, documentation)
+
+- **billing_compatibility**: 
+  • Definition of BOTH CPT codes
+  • NCCI edits for code pair
+  • Explicit compatibility statement
+  • Modifier requirements
+  • (Optional: Documentation requirements, common scenarios)
+
+- **modifier_query**: 
+  • Modifier definition
+  • When to use
+  • Usage rules
+  • Examples
+  • (Optional: Contraindications, bundling implications)
+
+- **concept_explanation**: 
+  • Clear definition
+  • Multiple examples
+  • Practical application
+  • (Optional: Edge cases, contraindications)
+
+- **bundling_query**: 
+  • NCCI rules for specific code pair
+  • Edit type (0, 1, 9)
+  • Modifier bypass rules
+  • (Optional: Documentation requirements)
+
+**Scoring Guide**:
+- 1.0: All required aspects fully covered
+- 0.8-0.9: Most required aspects covered
+- 0.6-0.7: Core aspects covered, minor gaps
+- 0.4-0.5: Partial coverage, significant gaps
+- 0.0-0.3: Minimal coverage, mostly irrelevant
+
+---
+
+### 2. Specificity Score (0.0-1.0)
+
+How specific and accurate is the evidence?
+
+- **High (0.8-1.0)**: Exact CPT codes, concrete examples, precise details
+- **Medium (0.5-0.7)**: Related but not exact, some generic info
+- **Low (0.0-0.4)**: Generic, vague, no specific codes/examples
+
+**Red Flags** (lower score):
+- Mentions different CPT codes than asked
+- Generic advice ("consult NCCI manual...")
+- No concrete examples
+- Information is outdated or ambiguous
+
+---
+
+### 3. Citation Count
+
+How many chunks contain **high-quality, directly relevant** information?
+
+**Quality Thresholds**:
+- BM25/Hybrid chunks: Score > 0.02
+- Semantic chunks: Score > 0.30
+- Range-filtered chunks: Score > 0.01
+
+**Count ONLY** chunks that:
+- Meet score threshold
+- Are directly relevant (not tangential)
+- Add unique information (not repetitive)
+
+**Expected Counts**:
+- Simple CPT lookup: 2-3 chunks
+- Billing compatibility: 3-5 chunks
+- Complex concepts: 4-6 chunks
+- Bundling query: 3-4 chunks
+
+---
+
+### 4. Contradiction Detection
+
+Check for conflicting statements:
+- Different rules for same code
+- Contradictory modifier requirements  
+- Incompatible usage guidelines
+- Conflicting numbers/values
+
+If found: Set `has_contradiction = True` and explain in reasoning
+
+---
+
+### 5. Sufficiency Decision
+
+**SUFFICIENT (True)** when ALL of:
+- Coverage ≥ 0.7
+- Specificity ≥ 0.7  
+- Citation count ≥ minimum for question type
+- No contradictions
+- Can confidently answer the question
+
+**INSUFFICIENT (False)** when ANY of:
+- Coverage < 0.5 (missing critical aspects)
+- Specificity < 0.5 (too generic)
+- Citation count below minimum
+- Contradictions detected
+- Evidence is ambiguous or incomplete
+
+---
+
+### 6. Missing Aspects
+
+If insufficient, list **SPECIFIC** missing aspects:
+
+**Good examples** ✅:
+- "NCCI bundling rules for CPT pair 14301+27702"
+- "Modifier 59 usage requirements for this scenario"
+- "Definition and usage of CPT 27702"
+
+**Bad examples** ❌:
+- "More information needed"
+- "Better evidence required"
+
+---
+
+### 7. Reasoning
+
+Explain your judgment:
+- Why these coverage/specificity scores?
+- Which chunks were high vs low quality?
+- What's covered vs missing?
+- How did you reach sufficiency decision?
+- Describe any contradictions
+
+**Example format**:
+```
+Coverage (0.X): [aspects covered and missing]
+Specificity (0.X): [relevance evaluation]
+Citations (N): [count high-quality chunks]
+Contradictions: [Yes/No - details if yes]
+Decision: SUFFICIENT/INSUFFICIENT because [reason]
+```
+
+---
+
+Provide your structured judgment now."""
