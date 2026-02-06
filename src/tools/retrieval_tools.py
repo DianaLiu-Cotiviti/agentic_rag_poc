@@ -15,7 +15,7 @@ from openai import AzureOpenAI
 
 from .bm25_store import BM25Store
 from .chroma_store import ChromaStore
-from ..state import RetrievalResult, QueryCandidate
+from ..state import RetrievalResult, QueryCandidate, SearchGuidance
 from ..config import AgenticRAGConfig
 
 
@@ -109,6 +109,47 @@ class RetrievalTools:
         )
         return response.data[0].embedding
     
+    def get_cpt_description(self, cpt_code: int) -> str:
+        """
+        Get the full description for a single CPT/HCPCS code
+        
+        Args:
+            cpt_code: CPT or HCPCS code (as integer or can be converted to string)
+            
+        Returns:
+            Description string, or empty string if not found
+            
+        Note: Uses cached descriptions from config.cpt_descriptions
+        """
+        code_str = str(cpt_code)
+        return self.config.cpt_descriptions.get(code_str, "")
+    
+    def get_cpt_descriptions(self, cpt_codes: List[int]) -> Dict[str, str]:
+        """
+        Get descriptions for multiple CPT/HCPCS codes at once (batch query)
+        
+        Args:
+            cpt_codes: List of CPT/HCPCS codes
+            
+        Returns:
+            Dict mapping code (as string) to description
+            Only includes codes that were found (missing codes are omitted)
+            
+        Example:
+            >>> tools.get_cpt_descriptions([14301, 27702, 99999])
+            {
+                "14301": "Adjacent tissue transfer...",
+                "27702": "Arthroplasty, ankle..."
+                # 99999 not found, so not included
+            }
+        """
+        descriptions = {}
+        for code in cpt_codes:
+            code_str = str(code)
+            if code_str in self.config.cpt_descriptions:
+                descriptions[code_str] = self.config.cpt_descriptions[code_str]
+        return descriptions
+    
     def range_routing(self, cpt_code: int, limit: int = 50) -> List[str]:
         """
         Range routing: lookup chunks by CPT code range
@@ -147,11 +188,30 @@ class RetrievalTools:
             for r in results
         ]
     
-    def semantic_search(self, query: str, top_k: int = 50) -> List[RetrievalResult]:
+    def semantic_search(
+        self, 
+        query: str, 
+        top_k: int = 50,
+        guidance: SearchGuidance = None
+    ) -> List[RetrievalResult]:
         """
-        Semantic vector search using ChromaDB
+        Semantic vector search using ChromaDB with optional search guidance
+        
+        Args:
+            query: Search query text
+            top_k: Number of results to return
+            guidance: Optional SearchGuidance to enhance the query
+            
+        Returns:
+            List of RetrievalResult objects
         """
-        query_embedding = self._embed_query(query)
+        # Enhance query with guidance if provided
+        enhanced_query = query
+        if guidance and guidance.semantic_guidance:
+            # Prepend guidance to query for better semantic matching
+            enhanced_query = f"{guidance.semantic_guidance}\n\nQuery: {query}"
+        
+        query_embedding = self._embed_query(enhanced_query)
         results = self.chroma_store.search(query_embedding, top_k=top_k)
         
         return [
@@ -169,10 +229,11 @@ class RetrievalTools:
         query: str, 
         top_k: int = 20,
         bm25_weight: float = 0.5,
-        semantic_weight: float = 0.5
+        semantic_weight: float = 0.5,
+        guidance: SearchGuidance = None
     ) -> List[RetrievalResult]:
         """
-        Hybrid search with weighted RRF fusion
+        Hybrid search with weighted RRF fusion and optional search guidance
         Combines BM25 and semantic search results
         
         Args:
@@ -180,14 +241,28 @@ class RetrievalTools:
             top_k: Number of results to return
             bm25_weight: Weight for BM25 scores (default: 0.5)
             semantic_weight: Weight for semantic scores (default: 0.5)
+            guidance: Optional SearchGuidance to enhance retrieval
             
-        Note: Weights are applied to RRF scores before fusion
+        Returns:
+            List of RetrievalResult objects
+            
+        Note: 
+            - Weights are applied to RRF scores before fusion
+            - Guidance is used to enhance semantic search with detailed instructions
+            - BM25 search uses boost_terms from guidance if provided
         """
-        # Get BM25 results
-        bm25_results = self.bm25_search(query, top_k=top_k * 2)
+        # Enhance query with boost terms for BM25
+        bm25_query = query
+        if guidance and guidance.boost_terms:
+            # Add boost terms to query for better keyword matching
+            boost_str = " ".join(guidance.boost_terms)
+            bm25_query = f"{query} {boost_str}"
         
-        # Get semantic results
-        semantic_results = self.semantic_search(query, top_k=top_k * 2)
+        # Get BM25 results with potentially boosted query
+        bm25_results = self.bm25_search(bm25_query, top_k=top_k * 2)
+        
+        # Get semantic results with guidance
+        semantic_results = self.semantic_search(query, top_k=top_k * 2, guidance=guidance)
         
         # Weighted RRF fusion
         fused_scores = {}
@@ -282,6 +357,19 @@ class RetrievalTools:
             It should NOT be exposed to LLMs - they should compose primitives instead.
             Direct mode uses it to avoid code duplication and ensure consistency.
         """
+        print("\n" + "="*100)
+        print("🔍 Multi-Query Hybrid Search 执行流程追踪")
+        print("="*100)
+        
+        # 显示输入参数
+        print(f"\n📥 输入参数:")
+        print(f"   - Query Candidates: {len(query_candidates)} 个")
+        for idx, qc in enumerate(query_candidates, 1):
+            has_guidance = hasattr(qc, 'guidance') and qc.guidance is not None
+            print(f"     {idx}. {qc.query[:60]}... (type={qc.query_type}, weight={qc.weight}, guidance={has_guidance})")
+        print(f"   - CPT Codes: {cpt_codes if cpt_codes else 'None'}")
+        print(f"   - Top K: {top_k}")
+        
         all_chunk_ids = set()
         retrieval_stats = {
             "range_routing_count": 0,
@@ -292,44 +380,102 @@ class RetrievalTools:
         }
         
         # Step 1: Range routing if CPT codes provided (supports multiple codes)
+        print(f"\n📌 Step 1: Range Routing (预过滤相关 chunks)")
         range_chunks = set()
         if cpt_codes:
+            print(f"   CPT Codes: {cpt_codes}")
             for cpt_code in cpt_codes:
                 chunks = self.range_routing(cpt_code, limit=300)
+                print(f"   - CPT {cpt_code}: 找到 {len(chunks)} 个 chunks")
                 range_chunks.update(chunks)
             all_chunk_ids.update(range_chunks)
             retrieval_stats["range_routing_count"] = len(range_chunks)
+            print(f"   ✅ Range Routing 总计: {len(range_chunks)} 个去重后的 chunks")
+        else:
+            print(f"   ⏭️  无 CPT codes，跳过 Range Routing")
         
-        # Step 2: Execute multiple queries with hybrid search
+        # Step 2: Execute multiple queries with hybrid search using guidance
+        print(f"\n📌 Step 2: Hybrid Search (每个 query candidate 使用 guidance 增强)")
+        print(f"   Query Candidates 数量: {len(query_candidates)}")
         query_results = []
-        for candidate in query_candidates:
-            results = self.hybrid_search(candidate.query, top_k=top_k * 2)
+        for idx, candidate in enumerate(query_candidates, 1):
+            # Use guidance if available
+            guidance = candidate.guidance if hasattr(candidate, 'guidance') else None
+            has_guidance = guidance is not None and guidance.semantic_guidance
+            
+            print(f"\n   Query {idx}/{len(query_candidates)}:")
+            print(f"   - Query: {candidate.query[:80]}{'...' if len(candidate.query) > 80 else ''}")
+            print(f"   - Query Type: {candidate.query_type}")
+            print(f"   - Weight: {candidate.weight}")
+            print(f"   - Has Guidance: {has_guidance}")
+            
+            if has_guidance:
+                guidance_preview = guidance.semantic_guidance[:100].replace('\n', ' ')
+                print(f"   - Guidance Preview: {guidance_preview}...")
+                print(f"   - Boost Terms: {guidance.boost_terms}")
+            
+            results = self.hybrid_search(
+                candidate.query, 
+                top_k=top_k * 2,
+                guidance=guidance
+            )
+            
+            print(f"   ✅ Hybrid Search 返回: {len(results)} 个 chunks")
+            if results:
+                print(f"      Top 3 scores (before weight): {[f'{r.score:.4f}' for r in results[:3]]}")
             
             # Weight results by query candidate weight
             for r in results:
                 r.score *= candidate.weight
             
+            if candidate.weight != 1.0 and results:
+                print(f"      Top 3 scores (after weight {candidate.weight}): {[f'{r.score:.4f}' for r in results[:3]]}")
+            
             query_results.append(results)
         
         # Step 3: Fuse all query results
+        print(f"\n📌 Step 3: RRF Fusion (融合所有 query 的结果)")
         all_results = []
         for results in query_results:
             all_results.extend(results)
+        print(f"   合并前总 chunks: {len(all_results)} (包含重复)")
         
         # Additional RRF fusion across queries
         fused_scores = self._rrf_fuse(*query_results)
+        print(f"   RRF 融合后去重 chunks: {len(fused_scores)}")
         
         # Boost range routing chunks
+        print(f"\n📌 Step 4: Boost Range Routing Chunks (增强预过滤的 chunks)")
+        boosted_count = 0
         for chunk_id in range_chunks:
             if chunk_id in fused_scores:
+                original_score = fused_scores[chunk_id]
                 fused_scores[chunk_id] *= 1.5  # 50% boost for range matches
+                boosted_count += 1
+        
+        if range_chunks:
+            print(f"   Range chunks: {len(range_chunks)}")
+            print(f"   在 RRF 结果中找到并 boost: {boosted_count} 个 (增强 50%)")
+            print(f"   未在 RRF 结果中的 range chunks: {len(range_chunks) - boosted_count}")
+        else:
+            print(f"   ⏭️  无 range chunks，跳过 boost")
         
         # Sort and take top_k
+        print(f"\n📌 Step 5: 排序和截断 (取 top {top_k})")
         sorted_chunks = sorted(
             fused_scores.items(), 
             key=lambda x: x[1], 
             reverse=True
         )[:top_k]
+        
+        print(f"   最终返回: {len(sorted_chunks)} 个 chunks")
+        if sorted_chunks:
+            print(f"   Top 5 最终分数: {[f'{score:.4f}' for _, score in sorted_chunks[:5]]}")
+            
+            # 统计 top_k 中有多少来自 range routing
+            range_in_top = sum(1 for chunk_id, _ in sorted_chunks if chunk_id in range_chunks)
+            if range_chunks:
+                print(f"   Top {top_k} 中来自 Range Routing: {range_in_top} ({range_in_top/len(sorted_chunks)*100:.1f}%)")
         
         # Convert to RetrievalResult
         final_results = []
@@ -344,5 +490,10 @@ class RetrievalTools:
         
         retrieval_stats["total_candidates"] = len(all_chunk_ids)
         retrieval_stats["final_count"] = len(final_results)
+        
+        print(f"\n{'='*100}")
+        print(f"✅ Multi-Query Hybrid Search 完成")
+        print(f"   统计信息: {retrieval_stats}")
+        print(f"{'='*100}\n")
         
         return final_results, retrieval_stats
