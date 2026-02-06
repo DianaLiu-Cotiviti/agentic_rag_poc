@@ -33,9 +33,16 @@ class OrchestratorDecision(BaseModel):
         description="Complexity level affecting retrieval and processing strategies"
     )
     
-    # Retrieval Strategy Selection
+    # Retrieval Strategy Hints (suggestions for Retrieval Router)
     retrieval_strategies: List[Literal["range_routing", "bm25", "semantic", "hybrid"]] = Field(
-        description="Ordered list of retrieval strategies to apply. Can include: range_routing (section-based), bm25 (keyword), semantic (embedding), hybrid (combined)",
+        description=(
+            "Strategy hints for Retrieval Router. Ordered list of suggested retrieval methods:\n"
+            "- range_routing: Section/CPT-based pre-filtering (use when query has CPT codes)\n"
+            "- bm25: Keyword-based retrieval (use for exact terms, codes, modifiers)\n"
+            "- semantic: Embedding-based retrieval (use for conceptual queries)\n"
+            "- hybrid: Combined BM25+Semantic (use for mixed keyword+conceptual queries)\n"
+            "Note: These are HINTS - Retrieval Router may adapt based on mode (direct/planning/tool_calling)"
+        ),
         min_items=1,
         max_items=3
     )
@@ -105,12 +112,12 @@ class OrchestratorAgent(BaseAgent):
         
         decision = response.choices[0].message.parsed
         
-        # Return all strategy decisions
+        # Return strategy decisions (mode is determined by config, not orchestrator)
         return {
             "question_type": decision.question_type,
             "question_keywords": decision.question_keywords,
             "question_complexity": decision.question_complexity,
-            "retrieval_strategies": decision.retrieval_strategies,
+            "retrieval_strategies": decision.retrieval_strategies,  # Strategy HINTS for router
             "enable_retry": decision.enable_retry,
             "max_retry_allowed": decision.max_retry_allowed,
             "require_structured_output": decision.require_structured_output,

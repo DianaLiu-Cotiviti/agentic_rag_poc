@@ -126,14 +126,14 @@ class QueryPlannerAgent(BaseAgent):
                 for qc in decision.query_candidates
             ],
             # Store additional planning metadata in messages for debugging
-            "messages": [
-                f"Primary Intent: {decision.primary_intent}",
-                f"Secondary Intents: {', '.join(decision.secondary_intents) if decision.secondary_intents else 'None'}",
-                f"Entities - CPT Codes: {', '.join(decision.entities.cpt_codes) if decision.entities.cpt_codes else 'None'}",
-                f"Entities - Modifiers: {', '.join(decision.entities.modifiers) if decision.entities.modifiers else 'None'}",
-                f"Entities - Procedures: {', '.join(decision.entities.procedures) if decision.entities.procedures else 'None'}",
-                f"Constraints: {', '.join(decision.constraints) if decision.constraints else 'None'}",
-                f"Retrieval Hints: {'; '.join(decision.retrieval_hints[:3])}...",  # First 3 hints
-                f"Query Planner Reasoning: {decision.reasoning}"
-            ]
+            # "messages": [
+            #     f"Primary Intent: {decision.primary_intent}",
+            #     f"Secondary Intents: {', '.join(decision.secondary_intents) if decision.secondary_intents else 'None'}",
+            #     f"Entities - CPT Codes: {', '.join(decision.entities.cpt_codes) if decision.entities.cpt_codes else 'None'}",
+            #     f"Entities - Modifiers: {', '.join(decision.entities.modifiers) if decision.entities.modifiers else 'None'}",
+            #     f"Entities - Procedures: {', '.join(decision.entities.procedures) if decision.entities.procedures else 'None'}",
+            #     f"Constraints: {', '.join(decision.constraints) if decision.constraints else 'None'}",
+            #     f"Retrieval Hints: {'; '.join(decision.retrieval_hints[:3])}...",  # First 3 hints
+            #     f"Query Planner Reasoning: {decision.reasoning}"
+            # ]
         }

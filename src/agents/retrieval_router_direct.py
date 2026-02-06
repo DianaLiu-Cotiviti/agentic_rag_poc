@@ -89,6 +89,16 @@ class DirectRetrievalRouter:
             **retrieval_stats
         }
         
+        # Save retrieved chunks to output
+        from ..utils.save_retrieval import save_retrieved_chunks
+        saved_path = save_retrieved_chunks(
+            chunks=results,
+            question=state.get('question', ''),
+            output_dir=self.config.retrieval_output_dir,
+            metadata=metadata
+        )
+        metadata["saved_to"] = saved_path
+        
         return {
             "retrieved_chunks": results,
             "retrieval_metadata": metadata

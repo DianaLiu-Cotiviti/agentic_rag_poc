@@ -53,7 +53,12 @@ class RetrievalParameters(BaseModel):
 
 class FusionParameters(BaseModel):
     """Result fusion configuration (for multi-query fusion only)"""
-    boost_range_results: float = Field(default=1.5, ge=1.0, le=2.0, description="Boost factor for range-routed chunks")
+    boost_range_results: float = Field(
+        default=2.0,  # ← 提高默认值到2.0
+        ge=1.0,       # ← 最小1.0（不降分）
+        le=5.0,       # ← 提高最大值到5.0，允许更强的boost
+        description="Boost factor for range-routed chunks (higher = prioritize pre-filtered results more)"
+    )
 
 
 class RetrievalRouterDecision(BaseModel):
@@ -96,15 +101,16 @@ class PlanningRetrievalRouter:
     - bm25_semantic: 一个query同时用BM25和Semantic，保留两组结果
     """
     
-    def __init__(self, config, tools):
+    def __init__(self, config, tools, client=None):
         """
         Args:
             config: Configuration object with Azure OpenAI settings
             tools: RetrievalTools instance
+            client: Azure OpenAI client (optional, will use config.client if not provided)
         """
         self.config = config
         self.tools = tools
-        self.client = config.client  # Azure OpenAI client
+        self.client = client if client is not None else getattr(config, 'client', None)
     
     def process(self, state: AgenticRAGState) -> dict:
         """
@@ -180,7 +186,8 @@ class PlanningRetrievalRouter:
             "mode": "planning",
             "plan_reasoning": decision.reasoning,
             "strategies_used": [],  # 每个query用的strategy (will be set in Step 2)
-            "total_chunks_retrieved": 0
+            "total_chunks_retrieved": 0,
+            "boost_range_results": decision.fusion_parameters.boost_range_results
         }
         
         # Step 1: Pre-filtering (Agent执行)
@@ -201,6 +208,7 @@ class PlanningRetrievalRouter:
         query_candidates = state.get("query_candidates", [])
         params = decision.retrieval_parameters
         strategies_used = []  # 记录使用的strategies
+        per_query_stats = []  # Track detailed execution info
         
         for mapping in decision.query_strategy_mapping:
             # 获取对应的query
@@ -208,6 +216,16 @@ class PlanningRetrievalRouter:
             query_text = query.get("query") if isinstance(query, dict) else query.query
             query_weight = query.get("weight", 1.0) if isinstance(query, dict) else query.weight
             strategy = mapping.strategy
+            
+            # Initialize stats for this query
+            query_stats = {
+                "query_index": mapping.query_index,
+                "query_text": query_text[:80] + "..." if len(query_text) > 80 else query_text,
+                "strategy": strategy,
+                "weight": query_weight,
+                "tools_called": [],
+                "chunks_retrieved": 0
+            }
             
             # 根据每个query的strategy执行对应的检索
             if strategy == "hybrid":
@@ -218,6 +236,9 @@ class PlanningRetrievalRouter:
                     bm25_weight=params.hybrid_bm25_weight,
                     semantic_weight=params.hybrid_semantic_weight
                 )
+                
+                query_stats["tools_called"].append("hybrid_search")
+                query_stats["chunks_retrieved"] = len(results)
                 
                 for r in results:
                     r.score *= query_weight
@@ -231,6 +252,9 @@ class PlanningRetrievalRouter:
                 # bm25: 纯关键词检索
                 results = self.tools.bm25_search(query_text, top_k=params.bm25_top_k)
                 
+                query_stats["tools_called"].append("bm25_search")
+                query_stats["chunks_retrieved"] = len(results)
+                
                 for r in results:
                     r.score *= query_weight
                     if r.chunk_id in range_chunk_ids:
@@ -242,6 +266,9 @@ class PlanningRetrievalRouter:
             elif strategy == "semantic":
                 # semantic: 纯语义检索
                 results = self.tools.semantic_search(query_text, top_k=params.semantic_top_k)
+                
+                query_stats["tools_called"].append("semantic_search")
+                query_stats["chunks_retrieved"] = len(results)
                 
                 for r in results:
                     r.score *= query_weight
@@ -269,10 +296,16 @@ class PlanningRetrievalRouter:
                         r.score *= decision.fusion_parameters.boost_range_results
                 all_results.extend(semantic_results)
                 
+                query_stats["tools_called"] = ["bm25_search", "semantic_search"]
+                query_stats["chunks_retrieved"] = len(bm25_results) + len(semantic_results)
+                
                 strategies_used.append(f"q{mapping.query_index}:bm25_semantic")
+            
+            per_query_stats.append(query_stats)
         
         metadata["strategies_used"] = strategies_used  # 记录每个query用的strategy
         metadata["num_queries_executed"] = len(query_candidates)
+        metadata["per_query_stats"] = per_query_stats  # Detailed execution info per query
         
         # Step 3: Fusion按照LLM的策略 (Agent执行)
         # 简化：直接聚合scores（已经在Step 2中应用了weights和boost）
@@ -284,6 +317,16 @@ class PlanningRetrievalRouter:
         metadata["total_chunks_retrieved"] = len(final_results)
         metadata["unique_chunks_before_fusion"] = len(set(r.chunk_id for r in all_results))
         metadata["total_results_before_aggregation"] = len(all_results)
+        
+        # Save retrieved chunks to output
+        from ..utils.save_retrieval import save_retrieved_chunks
+        saved_path = save_retrieved_chunks(
+            chunks=final_results,
+            question=state.get('question', ''),
+            output_dir=self.config.retrieval_output_dir,
+            metadata=metadata
+        )
+        metadata["saved_to"] = saved_path
         
         return {
             "retrieved_chunks": final_results,

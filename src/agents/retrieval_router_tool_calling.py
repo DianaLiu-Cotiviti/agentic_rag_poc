@@ -106,6 +106,9 @@ class ToolCallingRetrievalRouter:
             "rrf_fusion": []
         }
         
+        # Track detailed execution steps
+        execution_log = []
+        
         # Initialize client if not already set
         if not self.client:
             from openai import AzureOpenAI
@@ -120,6 +123,8 @@ class ToolCallingRetrievalRouter:
         while iteration < self.max_tool_iterations:
             iteration += 1
             
+            print(f"\n  🔄 Tool Calling Iteration #{iteration}")
+            
             response = self.client.chat.completions.create(
                 model=self.config.azure_deployment_name,
                 messages=messages,
@@ -133,12 +138,28 @@ class ToolCallingRetrievalRouter:
             
             # Check if LLM wants to call tools
             if assistant_message.tool_calls:
+                print(f"     LLM requested {len(assistant_message.tool_calls)} tool call(s)")
+                
                 for tool_call in assistant_message.tool_calls:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
                     
+                    print(f"     → Calling: {function_name}({', '.join(f'{k}={v}' for k, v in list(function_args.items())[:2])}...)")
+                    
                     # Execute tool
                     result = self._execute_tool(function_name, function_args, tool_results)
+                    
+                    # Log execution
+                    step_log = {
+                        "iteration": iteration,
+                        "tool_name": function_name,
+                        "arguments": function_args,
+                        "chunks_returned": result.get("chunks_found", 0),
+                        "result_id": result.get("result_id", "N/A")
+                    }
+                    execution_log.append(step_log)
+                    
+                    print(f"       ✓ Returned {result.get('chunks_found', 0)} chunks (ID: {result.get('result_id', 'N/A')})")
                     
                     # Add tool result to conversation
                     messages.append({
@@ -148,10 +169,29 @@ class ToolCallingRetrievalRouter:
                     })
             else:
                 # LLM finished tool calling
+                if assistant_message.content:
+                    print(f"     ✅ LLM finished: {assistant_message.content[:100]}...")
+                else:
+                    print(f"     ✅ LLM finished tool calling")
                 break
         
         # Aggregate all results
         final_results, metadata = self._aggregate_tool_results(tool_results, state)
+        
+        # Add execution log to metadata
+        metadata["execution_log"] = execution_log
+        metadata["total_iterations"] = iteration
+        metadata["total_tool_calls"] = len(execution_log)
+        
+        # Save retrieved chunks to output
+        from ..utils.save_retrieval import save_retrieved_chunks
+        saved_path = save_retrieved_chunks(
+            chunks=final_results,
+            question=state.get('question', ''),
+            output_dir=self.config.retrieval_output_dir,
+            metadata=metadata
+        )
+        metadata["saved_to"] = saved_path
         
         return {
             "retrieved_chunks": final_results,

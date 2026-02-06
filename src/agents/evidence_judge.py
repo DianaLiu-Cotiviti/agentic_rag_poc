@@ -209,44 +209,195 @@ class EvidenceJudgeAgent(BaseAgent):
             total_chunks=len(chunks)
         )
     
-    def _format_chunks_for_evaluation(self, chunks: List[RetrievalResult], max_chunks: int = 10) -> str:
+    def _format_chunks_for_evaluation(self, chunks: List[RetrievalResult]) -> str:
         """
-        Format chunks for LLM evaluation
+        分层展示chunks + LLM总结截断部分，避免信息丢失
+        
+        策略（方案1+3混合）：
+        - Top 5: 前800字符 + LLM总结剩余部分（如果被截断）
+        - Chunk 6-10: 前400字符 + LLM总结剩余部分（如果被截断）
+        - Chunk 11-20: 前200字符 + LLM总结剩余部分（如果被截断）
+        - 批量调用：1次LLM调用处理所有截断部分的总结
         
         Args:
             chunks: List of RetrievalResult objects
-            max_chunks: Maximum number of chunks to show (default: 10)
         """
         if not chunks:
             return "No chunks retrieved."
         
-        formatted_chunks = []
-        for i, chunk in enumerate(chunks[:max_chunks], 1):
-            # Handle both RetrievalResult objects and dicts
-            if isinstance(chunk, dict):
-                chunk_id = chunk.get("chunk_id", "unknown")
-                score = chunk.get("score", 0.0)
-                text = chunk.get("text", "")
-                metadata = chunk.get("metadata", {})
+        # Step 1: 收集所有需要总结的截断部分
+        chunks_to_summarize = []
+        for i, chunk in enumerate(chunks[:20]):
+            chunk_id, score, text, metadata = self._extract_chunk_data(chunk)
+            
+            # 根据tier决定展示长度
+            if i < 5:
+                preview_len = 800
+                tier = "detailed"
+            elif i < 10:
+                preview_len = 400
+                tier = "medium"
             else:
-                chunk_id = chunk.chunk_id
-                score = chunk.score
-                text = chunk.text
-                metadata = chunk.metadata
+                preview_len = 200
+                tier = "brief"
             
-            # Get CPT code from metadata if available
-            cpt_info = ""
-            if metadata.get("cpt_code"):
-                cpt_info = f" [CPT: {metadata['cpt_code']}]"
+            # 如果文本被截断，记录需要总结的部分
+            if len(text) > preview_len:
+                chunks_to_summarize.append({
+                    "index": i,
+                    "tier": tier,
+                    "preview": text[:preview_len],
+                    "remaining": text[preview_len:],  # 被截断的部分
+                    "chunk_id": chunk_id,
+                    "score": score,
+                    "metadata": metadata
+                })
+            else:
+                chunks_to_summarize.append({
+                    "index": i,
+                    "tier": tier,
+                    "preview": text,
+                    "remaining": None,  # 无需总结
+                    "chunk_id": chunk_id,
+                    "score": score,
+                    "metadata": metadata
+                })
+        
+        # Step 2: 批量总结所有截断部分（1次LLM调用）
+        summaries = self._batch_summarize_truncated_parts(chunks_to_summarize)
+        
+        # Step 3: 格式化展示（将总结直接append到preview后面）
+        formatted_chunks = []
+        
+        for item in chunks_to_summarize:
+            i = item["index"]
+            tier = item["tier"]
+            chunk_id = item["chunk_id"]
+            score = item["score"]
+            metadata = item["metadata"]
+            preview = item["preview"]
+            summary = summaries.get(i, "")  # 获取该chunk的总结
             
-            formatted_chunks.append(
-                f"**Chunk {i}** (ID: {chunk_id}, Score: {score:.4f}){cpt_info}\n{text[:500]}..."
+            # 将总结直接拼接到preview后面，形成完整文本
+            full_text = f"{preview} {summary}" if summary else preview
+            
+            cpt_info = f" [CPT: {metadata.get('cpt_code')}]" if metadata.get("cpt_code") else ""
+            
+            # 根据tier格式化（总结已append到full_text中）
+            if tier == "detailed":
+                formatted_chunks.append(
+                    f"**[Detailed {i+1}]** (ID: {chunk_id}, Score: {score:.4f}){cpt_info}\n"
+                    f"{full_text}"
+                )
+            elif tier == "medium":
+                formatted_chunks.append(
+                    f"**[Medium {i+1}]** (Score: {score:.4f}){cpt_info}\n"
+                    f"{full_text}"
+                )
+            else:  # brief
+                formatted_chunks.append(
+                    f"**[Brief {i+1}]** (Score: {score:.4f}){cpt_info}\n"
+                    f"{full_text}"
+                )
+        
+        # Step 4: 整体统计信息
+        summary_info = f"\n\n**📊 Overall Summary**\n"
+        summary_info += f"Total chunks analyzed: {len(chunks)}\n"
+        summary_info += f"Score range: {chunks[0].score:.4f} (highest) to {chunks[min(len(chunks)-1, 19)].score:.4f} (lowest)"
+        
+        return "\n\n".join(formatted_chunks) + summary_info
+    
+    def _batch_summarize_truncated_parts(self, chunks_data: List[dict]) -> dict:
+        """
+        批量总结所有被截断的chunk部分（1次LLM调用）
+        
+        使用配置的主模型进行总结
+        
+        Args:
+            chunks_data: List of chunk data with 'remaining' text to summarize
+            
+        Returns:
+            dict: {chunk_index: summary_text}
+        """
+        # 收集需要总结的chunks
+        to_summarize = [
+            (item["index"], item["tier"], item["remaining"])
+            for item in chunks_data
+            if item["remaining"]  # 只总结被截断的部分
+        ]
+        
+        if not to_summarize:
+            return {}  # 无需总结
+        
+        # 构建批量总结prompt
+        prompt = "Summarize the continuation of each chunk below. Be concise but capture key medical coding details.\n\n"
+        
+        for idx, tier, remaining_text in to_summarize:
+            # 根据tier决定总结长度和要求
+            if tier == "detailed":
+                instruction = "Provide detailed summary (2-3 sentences covering key medical coding details)"
+            elif tier == "medium":
+                instruction = "Provide medium summary (1-2 sentences with main points)"
+            else:  # brief
+                instruction = "Provide brief summary (1 sentence, key point only)"
+            
+            prompt += f"Chunk {idx} ({instruction}):\n{remaining_text[:1500]}\n\n"
+        
+        prompt += "\nIMPORTANT: Return summaries in format: Chunk X: [summary]\nEach summary should be a natural continuation of the previous text, without redundant introductions."
+        
+        try:
+            # 使用同一个client和deployment（不需要单独的小模型）
+            response = self.client.chat.completions.create(
+                model=self.config.azure_deployment_name,
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }],
+                temperature=0.3,
+                max_tokens=1000
             )
+            
+            # 解析summaries
+            summaries_text = response.choices[0].message.content
+            summaries = self._parse_batch_summaries(summaries_text)
+            
+            return summaries
+            
+        except Exception as e:
+            # 如果LLM调用失败，返回空（graceful degradation）
+            print(f"Warning: Batch summarization failed: {e}")
+            return {}
+    
+    def _parse_batch_summaries(self, summaries_text: str) -> dict:
+        """
+        解析批量总结的输出
         
-        chunks_text = "\n\n".join(formatted_chunks)
+        Expected format:
+        Chunk 0: This section explains...
+        Chunk 5: The remaining text discusses...
+        """
+        import re
+        summaries = {}
         
-        if len(chunks) > max_chunks:
-            chunks_text += f"\n\n... and {len(chunks) - max_chunks} more chunks"
+        # 正则提取 "Chunk X: summary"
+        pattern = r'Chunk\s+(\d+):\s*(.+?)(?=Chunk\s+\d+:|$)'
+        matches = re.findall(pattern, summaries_text, re.DOTALL)
         
-        return chunks_text
-
+        for chunk_idx, summary in matches:
+            summaries[int(chunk_idx)] = summary.strip()
+        
+        return summaries
+    
+    def _extract_chunk_data(self, chunk) -> tuple:
+        """提取chunk数据（兼容dict和对象）"""
+        if isinstance(chunk, dict):
+            return (
+                chunk.get("chunk_id", "unknown"),
+                chunk.get("score", 0.0),
+                chunk.get("text", ""),
+                chunk.get("metadata", {})
+            )
+        else:
+            return (chunk.chunk_id, chunk.score, chunk.text, chunk.metadata)
+   
+    
