@@ -60,14 +60,12 @@ class AgenticRAGState(TypedDict):
     max_retry_allowed: int  # Max retries allowed (0-3)
     require_structured_output: bool  # Whether structured extraction is needed
     orchestrator_reasoning: Optional[str]  # Orchestrator's reasoning
-    
-    # Legacy fields (for backward compatibility)
-    retrieval_strategy: Optional[Literal["bm25", "semantic", "hybrid"]]  # Deprecated: use retrieval_strategies
-    
+
     
     # ========== Query Planner outputs ==========
     query_candidates: List[QueryCandidate]
-    
+    # messages: List[str]  # Log messages from agents (e.g., Query Planner metadata
+
     # ========== Retrieval outputs ==========
     retrieved_chunks: List[RetrievalResult]
     retrieval_metadata: Dict[str, Any]
@@ -77,11 +75,10 @@ class AgenticRAGState(TypedDict):
     retry_count: int
     
     # ========== Query Refiner outputs (for retry loop) ==========
-    refined_queries: List[str]
+    # refined_queries: List[str]
     
     # ========== Final outputs ==========
-    structured_answer: Optional[StructuredAnswer]
+    # structured_answer: Optional[StructuredAnswer]
     
-    # ========== System metadata ==========
-    messages: List[str]  # Log messages for debugging
-    error: Optional[str]
+    # ========== Error handling ==========
+    # error: Optional[str]
