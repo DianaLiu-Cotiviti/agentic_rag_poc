@@ -128,29 +128,31 @@ Identify **query constraints** that affect retrieval or answer scope:
 **Scope Constraints:**
 - "for CPT 14000-14350 range", "within trunk procedures", "NCCI policies only"
 
-### 💡 STEP 5: Retrieval Hints
+### 💡 STEP 5: Retrieval Hints (策略层 - 建议使用什么工具/方法)
 
-Provide **actionable hints** for the retrieval system to optimize search:
+Provide **strategic recommendations** for the Retrieval Router on which retrieval strategies to use.
 
-**Section Hints:**
-- Which CPT code sections to prioritize (e.g., "CPT 14000-14999")
-- Which policy sections (e.g., "NCCI Chapter 3 - Correct Coding")
+**Important**: Retrieval Hints are STRATEGY-LEVEL recommendations (which tools to use), NOT tool-level guidance (how to use tools).
 
-**Search Strategy Hints:**
-- "Prioritize exact code matches over general guidelines"
-- "Look for modifier compatibility tables"
-- "Search for anatomical region-specific rules"
-- "Focus on PTP edit tables"
+**Retrieval Strategy Recommendations:**
+- **Range Routing**: "Use range_routing for CPT code pre-filtering" (when specific CPT codes are mentioned)
+- **Hybrid Search**: "Combine BM25 + semantic search for comprehensive coverage" (for complex queries)
+- **Semantic Search Only**: "Use pure semantic search for conceptual understanding" (for definition queries)
+- **BM25 Search Priority**: "Prioritize keyword matching for exact code lookups" (for code-specific queries)
+- **Multiple Strategy Combination**: "Execute both semantic and range_routing, then fuse results" (for multi-aspect queries)
 
-**Context Hints:**
-- "Requires both code definition AND policy context"
-- "May need multiple code sections (14xxx and 27xxx)"
-- "Cross-reference with general modifier rules"
+**Examples of Good Retrieval Hints** (策略层 ✅):
+- "Use range_routing to pre-filter chunks for CPT 14301 and 27702"
+- "Apply hybrid search for comprehensive NCCI policy retrieval"
+- "Prioritize semantic search for modifier definition understanding"
+- "Combine semantic + BM25 strategies for billing compatibility queries"
 
-**Ranking Hints:**
-- "Prioritize recent policy updates over general definitions"
-- "Code-specific rules outweigh general guidelines"
-- "Exact matches more important than conceptual similarity"
+**Examples of Bad Retrieval Hints** (工具层 ❌ - 不要写这些！):
+- ❌ "Look for modifier compatibility tables" (这是search guidance的内容)
+- ❌ "Search for anatomical region-specific rules" (这是search guidance的内容)
+- ❌ "Focus on finding PTP edit table entries" (这是search guidance的内容)
+
+**Note**: Specific search targets (what to find) are handled by Search Guidance, which is automatically generated per query candidate based on question type.
 
 ### 💭 STEP 6: Reasoning
 
@@ -194,12 +196,12 @@ Question Type: "modifier"
 }}
 → constraints: ["modifier-code compatibility constraint"]
 → retrieval_hints: [
-    "Prioritize NCCI modifier compatibility tables for CPT 14301",
-    "Search for modifier 59 specific usage guidelines",
-    "Cross-reference general modifier 59 policies with code-specific rules",
-    "Look for PTP edit tables mentioning 14301 and modifier allowances"
+    "Use hybrid search (BM25 + semantic) for comprehensive coverage",
+    "Apply range_routing to pre-filter chunks for CPT 14301",
+    "Prioritize semantic search for NCCI policy understanding",
+    "Combine multiple strategies for modifier compatibility verification"
 ]
-→ reasoning: "Modifier compatibility question requires original query plus expanded version with full NCCI context, section-specific query for modifier tables, and synonym variant. Key entities are modifier 59 and CPT 14301 with NCCI policy context. Retrieval should prioritize modifier compatibility tables and code-specific NCCI rules."
+→ reasoning: "Modifier compatibility question requires original query plus expanded version with full NCCI context, section-specific query for modifier tables, and synonym variant. Key entities are modifier 59 and CPT 14301 with NCCI policy context. Retrieval should use hybrid search combined with range routing for comprehensive coverage."
 
 **Example 2: Complex Multi-Part Policy Question**
 Query: "Under what circumstances can CPT 14301 be billed separately when performed with complex repair on the same anatomical region, and what modifiers should be used?"
@@ -243,13 +245,12 @@ Question Type: "guideline"
     "conditional: circumstances for separate billing"
 ]
 → retrieval_hints: [
-    "Search for NCCI bundling/unbundling rules for CPT 14301",
-    "Look for anatomical region-specific billing guidelines",
-    "Prioritize policy sections discussing complex repair combinations",
-    "Find modifier guidance for separately reportable procedures",
-    "Cross-reference general bundling principles with code-specific exceptions"
+    "Use hybrid search for comprehensive NCCI policy coverage",
+    "Apply range_routing for both CPT 14301 and related repair codes",
+    "Prioritize semantic search for bundling rule understanding",
+    "Combine BM25 for exact policy statements with semantic for context"
 ]
-→ reasoning: "Complex multi-part question requires 5 candidates covering original, expanded with full terminology, constraint-focused on bundling, section-specific for modifiers, and synonym variant. Multiple entities include CPT code, two procedures, anatomical constraint, and policy terms. Critical constraints are temporal (performed together) and spatial (same region). Retrieval must find bundling rules, exceptions, and modifier requirements."
+→ reasoning: "Complex multi-part question requires 4 candidates covering original, expanded with full terminology, constraint-focused on bundling, and synonym variant. Multiple entities include CPT code, two procedures, anatomical constraint, and policy terms. Critical constraints are temporal (performed together) and spatial (same region). Retrieval should use hybrid search combined with range routing for comprehensive bundling rules coverage."
 
 **Example 3: PTP Comparison Question**
 Query: "Can CPT 14301 and 27700 be billed together?"
@@ -284,12 +285,12 @@ Question Type: "PTP"
 }}
 → constraints: ["code pair compatibility"]
 → retrieval_hints: [
-    "Search NCCI PTP edit tables for code pair 14301-27700",
-    "Look for both directions: 14301 as column 1 OR column 2",
-    "Check modifier indicator (0, 1, or 9) for this pair",
-    "Include general PTP edit principles for different anatomical regions"
+    "Use hybrid search for PTP edit table lookup",
+    "Apply range_routing for both CPT 14301 and 27700",
+    "Prioritize BM25 search for exact PTP edit table entries",
+    "Use semantic search for general PTP edit principles and modifier indicators"
 ]
-→ reasoning: "PTP question requires original query plus expanded with both code descriptions, section-specific targeting PTP tables, and synonym variant. Two CPT codes from different anatomical regions are key entities with NCCI PTP policy context. Retrieval must find specific PTP edit table entries and modifier indicators for this code pair."
+→ reasoning: "PTP question requires original query plus expanded with both code descriptions, section-specific targeting PTP tables, and synonym variant. Two CPT codes from different anatomical regions are key entities with NCCI PTP policy context. Retrieval should use range routing for both codes combined with hybrid search for comprehensive PTP edit coverage."
 
 ## Now Analyze the User Query
 

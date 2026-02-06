@@ -121,7 +121,6 @@ def build_evidence_judgment_prompt(
     Guidelines:
     - Coverage: Does evidence cover all required aspects for this question type?
     - Specificity: Is evidence specific to exact CPT codes/topics asked?
-    - Citation Count: How many high-quality (score > threshold) chunks?
     - Contradiction: Any conflicting information?
     - Missing Aspects: What specific aspects are missing (for query refinement)?
     
@@ -221,29 +220,7 @@ How specific and accurate is the evidence?
 
 ---
 
-### 3. Citation Count
-
-How many chunks contain **high-quality, directly relevant** information?
-
-**Quality Thresholds**:
-- BM25/Hybrid chunks: Score > 0.02
-- Semantic chunks: Score > 0.30
-- Range-filtered chunks: Score > 0.01
-
-**Count ONLY** chunks that:
-- Meet score threshold
-- Are directly relevant (not tangential)
-- Add unique information (not repetitive)
-
-**Expected Counts**:
-- Simple CPT lookup: 2-3 chunks
-- Billing compatibility: 3-5 chunks
-- Complex concepts: 4-6 chunks
-- Bundling query: 3-4 chunks
-
----
-
-### 4. Contradiction Detection
+### 3. Contradiction Detection
 
 Check for conflicting statements:
 - Different rules for same code
@@ -255,25 +232,23 @@ If found: Set `has_contradiction = True` and explain in reasoning
 
 ---
 
-### 5. Sufficiency Decision
+### 4. Sufficiency Decision
 
 **SUFFICIENT (True)** when ALL of:
 - Coverage ≥ 0.7
 - Specificity ≥ 0.7  
-- Citation count ≥ minimum for question type
 - No contradictions
 - Can confidently answer the question
 
 **INSUFFICIENT (False)** when ANY of:
 - Coverage < 0.5 (missing critical aspects)
 - Specificity < 0.5 (too generic)
-- Citation count below minimum
 - Contradictions detected
 - Evidence is ambiguous or incomplete
 
 ---
 
-### 6. Missing Aspects
+### 5. Missing Aspects
 
 If insufficient, list **SPECIFIC** missing aspects:
 
@@ -288,7 +263,7 @@ If insufficient, list **SPECIFIC** missing aspects:
 
 ---
 
-### 7. Reasoning
+### 6. Reasoning
 
 Explain your judgment:
 - Why these coverage/specificity scores?
@@ -301,7 +276,6 @@ Explain your judgment:
 ```
 Coverage (0.X): [aspects covered and missing]
 Specificity (0.X): [relevance evaluation]
-Citations (N): [count high-quality chunks]
 Contradictions: [Yes/No - details if yes]
 Decision: SUFFICIENT/INSUFFICIENT because [reason]
 ```
