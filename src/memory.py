@@ -172,7 +172,7 @@ class WorkflowMemory:
             "is_sufficient": assessment.get('is_sufficient') if assessment else None,
             "coverage_score": assessment.get('coverage_score') if assessment else None,
             "specificity_score": assessment.get('specificity_score') if assessment else None,
-            "citation_count": assessment.get('citation_count') if assessment else None,
+
             "has_contradiction": assessment.get('has_contradiction') if assessment else None,
             "missing_aspects": assessment.get('missing_aspects') if assessment else [],
             "reasoning_preview": (assessment.get('reasoning', '') if assessment else '')[:500],

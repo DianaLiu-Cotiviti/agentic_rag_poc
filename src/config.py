@@ -27,6 +27,9 @@ class AgenticRAGConfig(BaseModel):
     bm25_index_path: str = "rag/build/bm25_index.pkl"
     chroma_db_path: str = "rag/build/chroma_db"
     
+    # CPT Code Description data
+    cpt_description_path: str = "rag/data/raw/CPT Codes with Long Descriptions 2026.xlsx"
+    
     # Output paths
     output_dir: str = "output"
     query_output_dir: str = "output/queries"
@@ -58,7 +61,6 @@ class AgenticRAGConfig(BaseModel):
     # Evidence quality thresholds
     min_coverage_score: float = 0.6
     min_specificity_score: float = 0.5
-    min_citation_count: int = 3
     
     # Agent model settings
     agent_temperature: float = 0
@@ -67,6 +69,7 @@ class AgenticRAGConfig(BaseModel):
     _client: Optional[object] = None
     _embedding_client: Optional[object] = None
     _chroma_client: Optional[object] = None
+    _cpt_descriptions: Optional[dict] = None  # CPT code -> description mapping
     
     @property
     def client(self):
@@ -84,6 +87,21 @@ class AgenticRAGConfig(BaseModel):
                 azure_endpoint=self.azure_openai_endpoint
             )
         return self._client
+    
+    @property
+    def cpt_descriptions(self) -> dict:
+        """
+        Lazy loading of CPT code descriptions
+        
+        只在第一次访问时从Excel加载，之后使用缓存。
+        
+        Returns:
+            dict: {code: description} mapping for CPT and HCPCS codes
+        """
+        if self._cpt_descriptions is None:
+            from .tools.preprocessing import load_cpt_descriptions
+            self._cpt_descriptions = load_cpt_descriptions(self.cpt_description_path)
+        return self._cpt_descriptions
     
     @property
     def embedding_client(self):
