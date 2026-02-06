@@ -12,18 +12,15 @@ from typing import List, Dict, Any, Optional
 
 
 class ChromaStore:
-    def __init__(self, persist_directory: str, collection_name: str = "ncci_chunks"):
+    def __init__(self, chroma_client, collection_name: str = "ncci_chunks"):
         """
         Initialize ChromaDB
         
         Args:
-            persist_directory: Local persistence directory (e.g., "build/chroma_db")
+            chroma_client: Shared ChromaDB PersistentClient from config
             collection_name: Collection name
         """
-        self.client = chromadb.PersistentClient(
-            path=persist_directory,
-            settings=Settings(anonymized_telemetry=False)
-        )
+        self.client = chroma_client
         self.collection = self.client.get_collection(name=collection_name)
     
     def search(

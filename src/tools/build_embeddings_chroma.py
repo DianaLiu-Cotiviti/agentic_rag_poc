@@ -36,27 +36,26 @@ def load_chunks(path: str):
     return chunks
 
 
-def main():
-    base_dir = "ncci_rag/" if os.path.exists("ncci_rag/build") else ""
-    ncci_chunks_path = f"{base_dir}build/chunks.jsonl"
-    chroma_db_path = f"{base_dir}build/chroma_db"  # Local persistence directory
+def build_embeddings(chunks_path: str, chroma_db_path: str, config=None):
+    """
+    构建ChromaDB Embeddings Index
+    
+    Args:
+        chunks_path: chunks.jsonl文件路径
+        chroma_db_path: ChromaDB存储目录
+        config: AgenticRAGConfig实例（可选，如果不提供则从环境变量加载）
+    """
+    # Load config if not provided
+    if config is None:
+        from ..config import AgenticRAGConfig
+        config = AgenticRAGConfig.from_env()
+    
+    # Use config's embedding client (consistent with agents)
+    client = config.embedding_client
+    deployment = config.azure_deployment_name_embedding
 
-    # Initialize Azure OpenAI
-    client = AzureOpenAI(
-        api_key=os.environ["AZURE_OPENAI_API_KEY_EMBEDDING"],
-        api_version=os.environ["AZURE_API_VERSION_EMBEDDING"],
-        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT_EMBEDDING"],
-    )
-    deployment = os.environ["AZURE_DEPLOYMENT_NAME_EMBEDDING"]
-
-    # Initialize ChromaDB (persist to local directory)
-    chroma_client = chromadb.PersistentClient(
-        path=chroma_db_path,
-        settings=Settings(
-            anonymized_telemetry=False,  # Disable telemetry
-            allow_reset=True
-        )
-    )
+    # Use config's shared ChromaDB client
+    chroma_client = config.chroma_client
     
     # Create or get collection
     # Delete if already exists
@@ -72,7 +71,7 @@ def main():
     )
 
     # Load chunks
-    chunks = load_chunks(ncci_chunks_path)
+    chunks = load_chunks(chunks_path)
     texts = [c["text"] for c in chunks]
     chunk_ids = [c["chunk_id"] for c in chunks]
     
@@ -128,6 +127,13 @@ def main():
     print(f"\n✅ ChromaDB saved to: {chroma_db_path}")
     print(f"   Collection: {COLLECTION_NAME}")
     print(f"   Total documents: {collection.count()}")
+
+
+def main():
+    from ..config import AgenticRAGConfig
+    
+    config = AgenticRAGConfig.from_env()
+    build_embeddings(config.chunks_path, config.chroma_db_path, config=config)
 
 
 if __name__ == "__main__":

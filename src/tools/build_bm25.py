@@ -6,9 +6,11 @@ from rank_bm25 import BM25Okapi
 import os
 
 def main():
-    base_dir = "ncci_rag/" if os.path.exists("ncci_rag/build") else ""
-    ncci_chunks_path = f"{base_dir}build/chunks.jsonl"
-    bm25_index_path = f"{base_dir}build/bm25_index.pkl"
+    from ..config import AgenticRAGConfig
+    
+    config = AgenticRAGConfig.from_env()
+    ncci_chunks_path = config.chunks_path
+    bm25_index_path = config.bm25_index_path
 
     texts = []
     chunk_ids = []

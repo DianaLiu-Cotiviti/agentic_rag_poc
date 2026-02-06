@@ -40,17 +40,18 @@ class RetrievalTools:
         
         # Load retrieval indices
         self.bm25_store = BM25Store.load(config.bm25_index_path)
-        self.chroma_store = ChromaStore(config.chroma_db_path, "ncci_chunks")
+        self.chroma_store = ChromaStore(config.chroma_client, "ncci_chunks")
         
         # Load chunks map
         self.chunks_map = self._load_chunks_map(config.chunks_path)
         
-        # Initialize embedding client (使用 embedding 专用配置)
+        # Initialize embedding client (使用独立的embedding endpoint)
         self.embedding_client = AzureOpenAI(
             api_key=config.azure_openai_api_key_embedding,
             api_version=config.azure_api_version_embedding,
             azure_endpoint=config.azure_openai_endpoint_embedding,
         )
+        self.embedding_deployment = config.azure_deployment_name_embedding
         
         # Initialize range index connection (keep open for performance)
         self.range_conn = sqlite3.connect(config.range_index_path)

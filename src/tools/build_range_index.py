@@ -80,19 +80,22 @@ def weight_for(chapter: str, section: str, tags: List[str],
     return w
 
 
-def main():
-    base_dir = "ncci_rag/" if os.path.exists("ncci_rag/build") else ""
-    ncci_chunks_path = f"{base_dir}build/chunks.jsonl"
-    cpt_range_index_path = f"{base_dir}build/cpt_range_index.db"
-
-    conn = sqlite3.connect(cpt_range_index_path)
+def build_range_db_index(chunks_path: str, index_path: str):
+    """
+    构建Range Index
+    
+    Args:
+        chunks_path: chunks.jsonl文件路径
+        index_path: 输出的数据库路径
+    """
+    conn = sqlite3.connect(index_path)
     cur = conn.cursor()
     for stmt in DDL.strip().split(";"):
         s = stmt.strip()
         if s:
             cur.execute(s)
 
-    with open(ncci_chunks_path, "r", encoding="utf-8") as f:
+    with open(chunks_path, "r", encoding="utf-8") as f:
         for line in f:
             c = json.loads(line)
             cid = c["chunk_id"]
@@ -122,7 +125,14 @@ def main():
 
     conn.commit()
     conn.close()
-    print(f"Built range index -> {cpt_range_index_path}")
+    print(f"Built range index -> {index_path}")
+
+
+def main():
+    from ..config import AgenticRAGConfig
+    
+    config = AgenticRAGConfig.from_env()
+    build_range_db_index(config.chunks_path, config.range_index_path)
 
 
 if __name__ == "__main__":
