@@ -10,7 +10,8 @@ A production-ready multi-agent Retrieval-Augmented Generation (RAG) system built
 
 - 🧠 **Multi-Agent Collaboration**: 5 specialized agents working intelligently together
 - 🔍 **Triple Retrieval Modes**: Direct (fast) / Planning (balanced) / Tool Calling (intelligent)
-- 🎯 **Hybrid Retrieval**: Range Routing + BM25 + Semantic Vector + RRF Fusion
+- � **CPT Description Integration**: Automatically enhances queries with 19,078 official CPT/HCPCS code descriptions
+- �🎯 **Hybrid Retrieval**: Range Routing + BM25 + Semantic Vector + RRF Fusion
 - 📊 **Evidence Quality Assessment**: Automated evidence sufficiency evaluation with retry mechanism
 - 💾 **Complete Memory System**: Full execution history with timestamp-based storage
 - 🔄 **Auto Index Management**: Intelligent index checking and building
