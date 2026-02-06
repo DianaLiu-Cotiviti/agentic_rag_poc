@@ -11,7 +11,16 @@ Tool Calling Retrieval Router - LLM驱动的工具调用
 
 import json
 from typing import List, Dict, Any
-from ..state import AgenticRAGState, RetrievalResult
+from ..state import AgenticRAGState, RetrievalResult, SearchGuidance
+from ..prompts.search_guidance_templates import (
+    get_ncci_semantic_guidance,
+    get_cpt_definition_semantic_guidance,
+    get_modifier_semantic_guidance,
+    get_billing_policy_semantic_guidance,
+    get_ncci_hybrid_guidance,
+    get_cpt_definition_hybrid_guidance,
+    get_modifier_hybrid_guidance
+)
 from ..prompts.retrieval_router_prompts import (
     build_tool_calling_prompt,
     RETRIEVAL_ROUTER_SYSTEM_MESSAGE
@@ -62,14 +71,8 @@ class ToolCallingRetrievalRouter:
         query_candidates = state.get("query_candidates", [])
         question_keywords = state.get("question_keywords", [])
         
-        # Get retrieval hints from messages (stored by QueryPlanner)
-        messages_state = state.get("messages", [])
-        retrieval_hints = []
-        for msg in messages_state:
-            if msg.startswith("Retrieval Hints:"):
-                hint_part = msg.replace("Retrieval Hints:", "").strip()
-                retrieval_hints = [h.strip() for h in hint_part.split(";") if h.strip()]
-                break
+        # Get retrieval hints from Query Planner (strategy-level recommendations)
+        retrieval_hints = state.get("retrieval_hints", [])
         
         # Build tool calling prompt
         prompt = build_tool_calling_prompt(
@@ -184,7 +187,7 @@ class ToolCallingRetrievalRouter:
         metadata["total_tool_calls"] = len(execution_log)
         
         # Save retrieved chunks to output
-        from ..utils.save_retrieval import save_retrieved_chunks
+        from ..utils.save_workflow_outputs import save_retrieved_chunks
         saved_path = save_retrieved_chunks(
             chunks=final_results,
             question=state.get('question', ''),
@@ -206,6 +209,23 @@ class ToolCallingRetrievalRouter:
             List of tool definitions for OpenAI API
         """
         return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_cpt_description",
+                    "description": "Get the full official description for a CPT/HCPCS code. Use this FIRST when you need to understand what a CPT code means before searching.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "cpt_code": {
+                                "type": "integer",
+                                "description": "CPT or HCPCS code (e.g., 14301, 27702)"
+                            }
+                        },
+                        "required": ["cpt_code"]
+                    }
+                }
+            },
             {
                 "type": "function",
                 "function": {
@@ -254,7 +274,7 @@ class ToolCallingRetrievalRouter:
                 "type": "function",
                 "function": {
                     "name": "semantic_search",
-                    "description": "Vector-based semantic search. Best for conceptual queries, definitions, and understanding context.",
+                    "description": "Vector-based semantic search with optional search guidance. Best for conceptual queries, definitions, and understanding context. Use guidance_types (array) to combine multiple search focuses for comprehensive retrieval.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -266,6 +286,15 @@ class ToolCallingRetrievalRouter:
                                 "type": "integer",
                                 "description": "Number of results to retrieve (default: 50)",
                                 "default": 50
+                            },
+                            "guidance_types": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": ["ncci", "cpt_definition", "modifier", "billing_policy"]
+                                },
+                                "description": "Array of guidance types to apply (can combine multiple): 'ncci' for NCCI policies/PTP edits, 'cpt_definition' for CPT code definitions, 'modifier' for modifier documentation, 'billing_policy' for billing policies. Examples: ['ncci'], ['cpt_definition', 'modifier'], ['ncci', 'cpt_definition', 'modifier']. Default: [] (no guidance)",
+                                "default": []
                             }
                         },
                         "required": ["query"]
@@ -276,7 +305,7 @@ class ToolCallingRetrievalRouter:
                 "type": "function",
                 "function": {
                     "name": "hybrid_search",
-                    "description": "Combined BM25 + semantic search with weighted fusion. Best for balanced exact + conceptual matching.",
+                    "description": "Combined BM25 + semantic search with weighted fusion and optional search guidance. Best for balanced exact + conceptual matching. Use guidance_types (array) to combine multiple search focuses for comprehensive retrieval.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -298,6 +327,15 @@ class ToolCallingRetrievalRouter:
                                 "type": "number",
                                 "description": "Weight for semantic scores (0.0-1.0, default: 0.5)",
                                 "default": 0.5
+                            },
+                            "guidance_types": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": ["ncci", "cpt_definition", "modifier", "billing_policy"]
+                                },
+                                "description": "Array of guidance types to apply (can combine multiple): 'ncci' for NCCI policies/PTP edits, 'cpt_definition' for CPT code definitions, 'modifier' for modifier documentation, 'billing_policy' for billing policies. Examples: ['ncci'], ['cpt_definition', 'modifier'], ['ncci', 'cpt_definition', 'modifier']. Default: [] (no guidance)",
+                                "default": []
                             }
                         },
                         "required": ["query"]
@@ -347,7 +385,23 @@ class ToolCallingRetrievalRouter:
             Tool execution result (to be sent back to LLM)
         """
         try:
-            if function_name == "range_routing":
+            if function_name == "get_cpt_description":
+                cpt_code = args.get("cpt_code")
+                description = self.tools.get_cpt_description(cpt_code)
+                
+                result = {
+                    "cpt_code": cpt_code,
+                    "description": description if description else f"No description found for CPT code {cpt_code}",
+                    "has_description": bool(description)
+                }
+                
+                # Store in tool_results (not used for final retrieval, but for context)
+                tool_results["cpt_descriptions"] = tool_results.get("cpt_descriptions", [])
+                tool_results["cpt_descriptions"].append(result)
+                
+                return result
+            
+            elif function_name == "range_routing":
                 cpt_code = args["cpt_code"]
                 limit = args.get("limit", 50)
                 chunk_ids = self.tools.range_routing(cpt_code, limit=limit)
@@ -390,12 +444,46 @@ class ToolCallingRetrievalRouter:
             elif function_name == "semantic_search":
                 query = args["query"]
                 top_k = args.get("top_k", 50)
-                results = self.tools.semantic_search(query, top_k=top_k)
+                guidance_types = args.get("guidance_types", [])
+                
+                # Generate combined guidance from multiple types
+                guidance = None
+                if guidance_types:
+                    # Extract CPT codes and modifiers from query for guidance generation
+                    import re
+                    cpt_codes = re.findall(r'\b\d{5}\b', query)
+                    modifiers = re.findall(r'\bmodifier\s+(\d{2})\b|\b(59|25|LT|RT|XE|XP|XS|XU)\b', query)
+                    modifiers = [m[0] or m[1] for m in modifiers if m[0] or m[1]]
+                    
+                    # Combine guidance texts from all requested types
+                    guidance_texts = []
+                    all_boost_terms = list(set(cpt_codes + modifiers))  # Deduplicate
+                    
+                    for guidance_type in guidance_types:
+                        if guidance_type == "ncci":
+                            guidance_texts.append(get_ncci_semantic_guidance(cpt_codes))
+                        elif guidance_type == "cpt_definition":
+                            guidance_texts.append(get_cpt_definition_semantic_guidance(cpt_codes))
+                        elif guidance_type == "modifier":
+                            guidance_texts.append(get_modifier_semantic_guidance(modifiers, cpt_codes if cpt_codes else None))
+                        elif guidance_type == "billing_policy":
+                            guidance_texts.append(get_billing_policy_semantic_guidance("billing policy"))
+                    
+                    if guidance_texts:
+                        # Combine all guidance texts with clear separators
+                        combined_guidance = "\n\n---\n\n".join(guidance_texts)
+                        guidance = SearchGuidance(
+                            semantic_guidance=combined_guidance,
+                            boost_terms=all_boost_terms
+                        )
+                
+                results = self.tools.semantic_search(query, top_k=top_k, guidance=guidance)
                 
                 result_id = f"semantic_{len(tool_results['semantic_search'])}"
                 tool_results["semantic_search"].append({
                     "id": result_id,
                     "query": query,
+                    "guidance_types": guidance_types,
                     "results": results
                 })
                 
@@ -404,7 +492,8 @@ class ToolCallingRetrievalRouter:
                     "success": True,
                     "chunks_found": len(results),
                     "top_score": results[0].score if results else 0.0,
-                    "message": f"Semantic search returned {len(results)} chunks"
+                    "guidance_applied": ", ".join(guidance_types) if guidance_types else "none",
+                    "message": f"Semantic search returned {len(results)} chunks (guidance: {', '.join(guidance_types) if guidance_types else 'none'})"
                 }
             
             elif function_name == "hybrid_search":
@@ -412,17 +501,70 @@ class ToolCallingRetrievalRouter:
                 top_k = args.get("top_k", 20)
                 bm25_weight = args.get("bm25_weight", 0.5)
                 semantic_weight = args.get("semantic_weight", 0.5)
+                guidance_types = args.get("guidance_types", [])
+                
+                # Generate combined guidance from multiple types
+                guidance = None
+                if guidance_types:
+                    # Extract CPT codes and modifiers from query
+                    import re
+                    cpt_codes = re.findall(r'\b\d{5}\b', query)
+                    modifiers = re.findall(r'\bmodifier\s+(\d{2})\b|\b(59|25|LT|RT|XE|XP|XS|XU)\b', query)
+                    modifiers = [m[0] or m[1] for m in modifiers if m[0] or m[1]]
+                    
+                    # Combine guidance from all types (hybrid returns dict)
+                    guidance_texts = []
+                    all_boost_terms = list(set(cpt_codes + modifiers))
+                    combined_metadata_filters = {}
+                    
+                    for guidance_type in guidance_types:
+                        guidance_dict = {}
+                        if guidance_type == "ncci":
+                            guidance_dict = get_ncci_hybrid_guidance(cpt_codes)
+                        elif guidance_type == "cpt_definition":
+                            guidance_dict = get_cpt_definition_hybrid_guidance(cpt_codes)
+                        elif guidance_type == "modifier":
+                            guidance_dict = get_modifier_hybrid_guidance(modifiers, cpt_codes if cpt_codes else None)
+                        
+                        if guidance_dict:
+                            guidance_texts.append(guidance_dict.get("semantic_guidance", ""))
+                            all_boost_terms.extend(guidance_dict.get("boost_terms", []))
+                            # Merge metadata filters (combining doc_types)
+                            for key, value in guidance_dict.get("metadata_filters", {}).items():
+                                if key in combined_metadata_filters:
+                                    if isinstance(value, list):
+                                        combined_metadata_filters[key].extend(value)
+                                else:
+                                    combined_metadata_filters[key] = value if isinstance(value, list) else [value]
+                    
+                    if guidance_texts:
+                        # Deduplicate boost terms
+                        all_boost_terms = list(set(all_boost_terms))
+                        # Deduplicate metadata filter lists
+                        for key in combined_metadata_filters:
+                            if isinstance(combined_metadata_filters[key], list):
+                                combined_metadata_filters[key] = list(set(combined_metadata_filters[key]))
+                        
+                        combined_guidance = "\n\n---\n\n".join(guidance_texts)
+                        guidance = SearchGuidance(
+                            semantic_guidance=combined_guidance,
+                            boost_terms=all_boost_terms,
+                            metadata_filters=combined_metadata_filters
+                        )
+                
                 results = self.tools.hybrid_search(
                     query,
                     top_k=top_k,
                     bm25_weight=bm25_weight,
-                    semantic_weight=semantic_weight
+                    semantic_weight=semantic_weight,
+                    guidance=guidance
                 )
                 
                 result_id = f"hybrid_{len(tool_results['hybrid_search'])}"
                 tool_results["hybrid_search"].append({
                     "id": result_id,
                     "query": query,
+                    "guidance_types": guidance_types,
                     "results": results
                 })
                 
@@ -431,7 +573,8 @@ class ToolCallingRetrievalRouter:
                     "success": True,
                     "chunks_found": len(results),
                     "top_score": results[0].score if results else 0.0,
-                    "message": f"Hybrid search returned {len(results)} chunks"
+                    "guidance_applied": ", ".join(guidance_types) if guidance_types else "none",
+                    "message": f"Hybrid search returned {len(results)} chunks (guidance: {', '.join(guidance_types) if guidance_types else 'none'})"
                 }
             
             elif function_name == "rrf_fusion":

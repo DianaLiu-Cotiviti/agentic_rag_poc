@@ -53,19 +53,44 @@ class DirectRetrievalRouter:
         from ..utils.keyword_parser import extract_cpt_codes, has_cpt_codes
         
         cpt_codes_str = extract_cpt_codes(question_keywords)
+        # Convert to List[int], or None if no codes found (empty list → None for cleaner logic)
         cpt_codes = [int(code) for code in cpt_codes_str] if cpt_codes_str else None
         
+        # Batch get CPT descriptions for all codes at once (more efficient)
+        cpt_descriptions = {}
+        if cpt_codes:
+            cpt_descriptions = self.tools.get_cpt_descriptions(cpt_codes)
+        
         # Convert query_candidates to QueryCandidate objects if needed
+        # Enhance queries with CPT descriptions for better semantic search
         candidates = []
         for qc in query_candidates:
             if isinstance(qc, dict):
+                query_text = qc["query"]
+                # Enhance query with CPT descriptions if available
+                if cpt_descriptions:
+                    desc_text = " ".join(cpt_descriptions.values())
+                    query_text = f"{query_text} [CPT Description: {desc_text}]"
+                
                 candidates.append(QueryCandidate(
-                    query=qc["query"],
-                    query_type=qc.get("query_type", "original"),  # Default to "original" (valid Literal value)
-                    weight=qc.get("weight", 1.0)
+                    query=query_text,
+                    query_type=qc.get("query_type", "original"),
+                    weight=qc.get("weight", 1.0),
+                    guidance=qc.get("guidance")  # Preserve guidance from Query Planner
                 ))
             else:
-                candidates.append(qc)
+                # Enhance existing QueryCandidate
+                query_text = qc.query
+                if cpt_descriptions:
+                    desc_text = " ".join(cpt_descriptions.values())
+                    query_text = f"{query_text} [CPT Description: {desc_text}]"
+                
+                candidates.append(QueryCandidate(
+                    query=query_text,
+                    query_type=qc.query_type,
+                    weight=qc.weight,
+                    guidance=qc.guidance if hasattr(qc, 'guidance') else None  # Preserve guidance
+                ))
         
         # Call multi_query_hybrid_search directly
         # This handles: Range routing (all CPT codes) → Hybrid search for all queries → RRF fusion → Boost
@@ -86,11 +111,12 @@ class DirectRetrievalRouter:
             "mode": "direct",
             "strategies_used": strategies_used,
             "num_queries": len(candidates),
+            "cpt_descriptions_used": cpt_descriptions,
             **retrieval_stats
         }
         
         # Save retrieved chunks to output
-        from ..utils.save_retrieval import save_retrieved_chunks
+        from ..utils.save_workflow_outputs import save_retrieved_chunks
         saved_path = save_retrieved_chunks(
             chunks=results,
             question=state.get('question', ''),

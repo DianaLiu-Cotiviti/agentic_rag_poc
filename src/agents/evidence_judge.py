@@ -5,9 +5,8 @@ Evidence Judge Agent - 证据评判官
 1. 证据是否充分回答问题 (is_sufficient)
 2. 证据覆盖度 (coverage_score)
 3. 证据相关性和准确性 (specificity_score)
-4. 可引用的高质量chunk数量 (citation_count)
-5. 是否存在矛盾信息 (has_contradiction)
-6. 缺失的方面 (missing_aspects)
+4. 是否存在矛盾信息 (has_contradiction)
+5. 缺失的方面 (missing_aspects)
 """
 
 from typing import List
@@ -28,7 +27,6 @@ class EvidenceJudgment(BaseModel):
     - is_sufficient: 证据是否足够回答问题（综合考虑数量、质量、覆盖度）
     - coverage_score: 证据对问题各方面的覆盖程度（0.0-1.0）
     - specificity_score: 证据的特定性和准确性（0.0-1.0）
-    - citation_count: 可引用的高质量chunk数量（score > threshold）
     - has_contradiction: 检索结果中是否存在矛盾信息
     - missing_aspects: 问题中未被覆盖的方面（用于指导重试）
     - reasoning: 评估推理过程（解释为什么sufficient/insufficient）
@@ -45,10 +43,6 @@ class EvidenceJudgment(BaseModel):
         ge=0.0,
         le=1.0,
         description="How specific and accurate the evidence is (0.0-1.0)"
-    )
-    citation_count: int = Field(
-        ge=0,
-        description="Number of high-quality chunks that can be cited"
     )
     has_contradiction: bool = Field(
         description="Whether there are contradictory statements in the evidence"
@@ -75,7 +69,6 @@ class EvidenceJudgeAgent(BaseAgent):
     2. 评估证据质量指标：
        - coverage_score: 覆盖问题的多个方面（CPT code定义、modifier、bundling等）
        - specificity_score: 证据的准确性和相关性
-       - citation_count: 可用于引用的高质量chunks
     
     3. 识别问题：
        - has_contradiction: 检测矛盾信息
@@ -129,7 +122,6 @@ class EvidenceJudgeAgent(BaseAgent):
                     "is_sufficient": False,
                     "coverage_score": 0.0,
                     "specificity_score": 0.0,
-                    "citation_count": 0,
                     "has_contradiction": False,
                     "missing_aspects": ["No chunks retrieved - all aspects missing"],
                     "reasoning": "No relevant chunks were retrieved. Need to refine query or adjust retrieval strategy."
@@ -164,7 +156,6 @@ class EvidenceJudgeAgent(BaseAgent):
                 "is_sufficient": judgment.is_sufficient,
                 "coverage_score": judgment.coverage_score,
                 "specificity_score": judgment.specificity_score,
-                "citation_count": judgment.citation_count,
                 "has_contradiction": judgment.has_contradiction,
                 "missing_aspects": judgment.missing_aspects,
                 "reasoning": judgment.reasoning

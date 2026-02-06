@@ -9,8 +9,16 @@ Responsible for:
 from pydantic import BaseModel, Field
 from typing import Literal, List, Dict
 from .base import BaseAgent
-from ..state import AgenticRAGState, QueryCandidate
+from ..state import AgenticRAGState, QueryCandidate, SearchGuidance
 from ..prompts.query_planner_prompts import build_query_planner_prompt, QUERY_PLANNER_SYSTEM_MESSAGE
+from ..prompts.search_guidance_templates import select_guidance_for_query
+
+
+class QueryCandidateOutput(BaseModel):
+    """Query candidate from LLM output (without guidance)"""
+    query: str
+    query_type: Literal["original", "expanded", "synonym", "section_specific", "constraint_focused"]
+    weight: float = 1.0
 
 
 class EntityExtraction(BaseModel):
@@ -30,7 +38,7 @@ class QueryPlannerDecision(BaseModel):
     Structures the user query into sub-queries, intents, entities, and retrieval hints
     """
     # Query Candidates (Sub-queries)
-    query_candidates: List[QueryCandidate] = Field(
+    query_candidates: List[QueryCandidateOutput] = Field(
         description="2-4 search-optimized query variants",
         min_length=2,
         max_length=4
@@ -115,16 +123,45 @@ class QueryPlannerAgent(BaseAgent):
         
         decision = response.choices[0].message.parsed
         
+        # Extract entities for guidance generation
+        cpt_codes = decision.entities.cpt_codes if decision.entities else []
+        modifiers = decision.entities.modifiers if decision.entities else []
+        
+        # Generate query candidates with search guidance
+        query_candidates_with_guidance = []
+        for qc in decision.query_candidates:
+            # Automatically generate appropriate guidance for each query
+            # Use semantic guidance by default (retrieval tools will adapt for hybrid)
+            guidance_text = select_guidance_for_query(
+                query_type=qc.query_type,
+                question_type=question_type,
+                cpt_codes=cpt_codes,
+                modifiers=modifiers,
+                retrieval_method="semantic"
+            )
+            
+            # Create SearchGuidance object
+            guidance = SearchGuidance(
+                semantic_guidance=guidance_text,
+                boost_terms=cpt_codes + modifiers,  # Basic boost terms
+                target_doc_types=[],  # Will be filled by retrieval tools
+                expected_sections=[],  # Will be filled by retrieval tools
+                metadata_filters={}  # Will be filled by retrieval tools
+            )
+            
+            # Create QueryCandidate with guidance
+            candidate = QueryCandidate(
+                query=qc.query,
+                query_type=qc.query_type,
+                weight=qc.weight,
+                guidance=guidance
+            )
+            query_candidates_with_guidance.append(candidate)
+        
         # Convert to state-compatible format
         return {
-            "query_candidates": [
-                {
-                    "query": qc.query,
-                    "query_type": qc.query_type,
-                    "weight": qc.weight
-                }
-                for qc in decision.query_candidates
-            ],
+            "query_candidates": query_candidates_with_guidance,
+            "retrieval_hints": decision.retrieval_hints if decision.retrieval_hints else [],
             # Store additional planning metadata in messages for debugging
             # "messages": [
             #     f"Primary Intent: {decision.primary_intent}",

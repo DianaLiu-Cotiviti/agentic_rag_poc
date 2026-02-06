@@ -127,14 +127,8 @@ class PlanningRetrievalRouter:
         retrieval_strategies = state.get("retrieval_strategies", ["hybrid"])
         query_candidates = state.get("query_candidates", [])
         
-        # Get retrieval hints from messages (stored by QueryPlanner)
-        messages = state.get("messages", [])
-        retrieval_hints = []
-        for msg in messages:
-            if msg.startswith("Retrieval Hints:"):
-                hint_part = msg.replace("Retrieval Hints:", "").strip()
-                retrieval_hints = [h.strip() for h in hint_part.split(";") if h.strip()]
-                break
+        # Get retrieval hints from Query Planner (strategy-level recommendations)
+        retrieval_hints = state.get("retrieval_hints", [])
         
         # Build prompt for LLM to generate plan
         prompt = build_retrieval_router_prompt(
@@ -192,17 +186,27 @@ class PlanningRetrievalRouter:
         
         # Step 1: Pre-filtering (Agent执行)
         range_chunk_ids = set()
+        cpt_descriptions = {}  # Store CPT descriptions for query enhancement
+        
         if decision.pre_filtering.apply_range_routing:
-            for code in decision.pre_filtering.range_filter_cpt_codes:
+            # Convert codes to integers
+            cpt_codes_list = [int(code) for code in decision.pre_filtering.range_filter_cpt_codes]
+            
+            # Batch get all CPT descriptions at once (more efficient)
+            cpt_descriptions = self.tools.get_cpt_descriptions(cpt_codes_list)
+            
+            # Get range routing chunks for each code
+            for code in cpt_codes_list:
                 try:
                     chunk_ids = self.tools.range_routing(
-                        int(code),
+                        code,
                         limit=decision.pre_filtering.range_filter_limit
                     )
                     range_chunk_ids.update(chunk_ids)
                 except:
                     pass  # Skip invalid codes
             metadata["range_chunks_count"] = len(range_chunk_ids)
+            metadata["cpt_descriptions_used"] = cpt_descriptions
         
         # Step 2: Execute retrieval - 每个query用其最适合的strategy (Agent执行)
         query_candidates = state.get("query_candidates", [])
@@ -215,7 +219,13 @@ class PlanningRetrievalRouter:
             query = query_candidates[mapping.query_index]
             query_text = query.get("query") if isinstance(query, dict) else query.query
             query_weight = query.get("weight", 1.0) if isinstance(query, dict) else query.weight
+            query_guidance = query.get("guidance") if isinstance(query, dict) else (query.guidance if hasattr(query, 'guidance') else None)
             strategy = mapping.strategy
+            
+            # Enhance query with CPT descriptions if available
+            if cpt_descriptions:
+                desc_text = " ".join(cpt_descriptions.values())
+                query_text = f"{query_text} [CPT Description: {desc_text}]"
             
             # Initialize stats for this query
             query_stats = {
@@ -234,7 +244,8 @@ class PlanningRetrievalRouter:
                     query_text,
                     top_k=params.hybrid_top_k,
                     bm25_weight=params.hybrid_bm25_weight,
-                    semantic_weight=params.hybrid_semantic_weight
+                    semantic_weight=params.hybrid_semantic_weight,
+                    guidance=query_guidance
                 )
                 
                 query_stats["tools_called"].append("hybrid_search")
@@ -265,7 +276,11 @@ class PlanningRetrievalRouter:
             
             elif strategy == "semantic":
                 # semantic: 纯语义检索
-                results = self.tools.semantic_search(query_text, top_k=params.semantic_top_k)
+                results = self.tools.semantic_search(
+                    query_text, 
+                    top_k=params.semantic_top_k,
+                    guidance=query_guidance
+                )
                 
                 query_stats["tools_called"].append("semantic_search")
                 query_stats["chunks_retrieved"] = len(results)
@@ -289,7 +304,11 @@ class PlanningRetrievalRouter:
                 all_results.extend(bm25_results)
                 
                 # Semantic retrieval
-                semantic_results = self.tools.semantic_search(query_text, top_k=params.semantic_top_k)
+                semantic_results = self.tools.semantic_search(
+                    query_text, 
+                    top_k=params.semantic_top_k,
+                    guidance=query_guidance
+                )
                 for r in semantic_results:
                     r.score *= query_weight
                     if r.chunk_id in range_chunk_ids:
@@ -319,7 +338,7 @@ class PlanningRetrievalRouter:
         metadata["total_results_before_aggregation"] = len(all_results)
         
         # Save retrieved chunks to output
-        from ..utils.save_retrieval import save_retrieved_chunks
+        from ..utils.save_workflow_outputs import save_retrieved_chunks
         saved_path = save_retrieved_chunks(
             chunks=final_results,
             question=state.get('question', ''),
