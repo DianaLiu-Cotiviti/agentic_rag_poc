@@ -124,6 +124,7 @@ class SimpleAgenticRAGWorkflow:
         职责：
         1. 生成query candidates (如果是planning或tool_calling mode)
         2. Direct mode会跳过这一步（或生成minimal queries）
+        3. 保存query candidates到output/queries
         """
         print("\n" + "="*80)
         print("📋 Step 2: Query Planner - Generating query candidates...")
@@ -134,9 +135,25 @@ class SimpleAgenticRAGWorkflow:
         query_candidates = result.get('query_candidates', [])
         print(f"Generated {len(query_candidates)} query candidates:")
         for i, qc in enumerate(query_candidates, 1):
-            # qc is a dict, not an object
-            query_text = qc.get('query', qc.get('query_text', str(qc)))
+            # qc is a QueryCandidate object
+            query_text = qc.query if hasattr(qc, 'query') else str(qc)
             print(f"  {i}. {query_text}")
+        
+        # Save query candidates to output/queries
+        if query_candidates:
+            from .utils.save_workflow_outputs import save_query_candidates
+            saved_path = save_query_candidates(
+                query_candidates=query_candidates,
+                question=state.get('question', ''),
+                output_dir=self.config.query_output_dir,
+                metadata={
+                    'question_type': state.get('question_type'),
+                    'question_complexity': state.get('question_complexity'),
+                    'retrieval_strategies': state.get('retrieval_strategies'),
+                    'mode': self.config.retrieval_mode
+                }
+            )
+            print(f"💾 Query candidates saved to: {saved_path}")
         
         state.update(result)
         return state
@@ -210,7 +227,7 @@ class SimpleAgenticRAGWorkflow:
         职责：
         1. 使用新的三层chunk formatting策略
         2. LLM批量总结截断部分
-        3. 评估coverage, specificity, citation_count
+        3. 评估coverage, specificity
         4. 返回is_sufficient判断
         """
         print("\n" + "="*80)
@@ -223,7 +240,7 @@ class SimpleAgenticRAGWorkflow:
         print(f"Is Sufficient: {assessment.get('is_sufficient')}")
         print(f"Coverage Score: {assessment.get('coverage_score', 0):.2f}")
         print(f"Specificity Score: {assessment.get('specificity_score', 0):.2f}")
-        print(f"Citation Count: {assessment.get('citation_count', 0)}")
+
         print(f"Has Contradiction: {assessment.get('has_contradiction')}")
         if assessment.get('missing_aspects'):
             print(f"Missing Aspects: {assessment.get('missing_aspects')}")
