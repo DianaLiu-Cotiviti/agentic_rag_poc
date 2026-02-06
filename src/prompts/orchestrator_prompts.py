@@ -58,9 +58,14 @@ Extract 3-10 key terms from user query including:
 - **medium**: 2-3 concepts, requires combining information (e.g., "Can CPT 14301 be billed with modifier 59?")
 - **complex**: Multiple concepts, requires synthesis and reasoning (e.g., "Under what circumstances can adjacent tissue transfer be billed separately from complex repair in the same anatomical region?")
 
-### 🎯 STEP 2: Retrieval Strategy Pipeline
+### 🔍 STEP 2: Retrieval Strategy Hints (Suggestions for Retrieval Router)
 
-Select an ORDERED LIST of retrieval strategies (1-3 strategies). Options:
+Provide an ORDERED LIST of retrieval strategy HINTS (1-3 strategies). These are SUGGESTIONS for the Retrieval Router:
+
+**Important**: You are providing HINTS, not making final decisions. The Retrieval Router will consider your hints based on the configured mode:
+- **direct mode**: Strictly follows your hints in sequence
+- **planning mode**: LLM references your hints when generating retrieval plan
+- **tool_calling mode**: Hints guide LLM's tool selection decisions
 
 **range_routing**: Section/Range-based retrieval (Pre-filtering strategy)
 - Use when: Query contains CPT codes, code ranges, or anatomical section references
@@ -144,7 +149,7 @@ Select an ORDERED LIST of retrieval strategies (1-3 strategies). Options:
 
 Provide a concise 2-3 sentence explanation covering:
 1. Why you chose this question type and complexity level
-2. Rationale for the retrieval strategy pipeline
+2. Rationale for the retrieval strategy hints (what methods and why)
 3. Justification for retry settings and output structure
 
 ## Decision Examples
@@ -154,40 +159,40 @@ Query: "Is modifier 59 allowed with CPT 14301?"
 → question_type: "modifier"
 → keywords: ["modifier 59", "CPT 14301", "distinct procedural service"]
 → complexity: "medium"
-→ strategies: ["range_routing", "bm25", "semantic"]
+→ retrieval_strategies: ["range_routing", "bm25", "semantic"]  # HINTS for router
 → enable_retry: true, max_retry: 1
 → require_structured_output: true
-→ reasoning: "Modifier-specific question requiring precise policy lookup. Using 3-strategy approach: 1) Range routing to CPT 14000 section (pre-filter), then 2) BM25 and 3) Semantic run in parallel on filtered chunks. BM25 finds exact 'modifier 59' matches, semantic captures policy context even with different wording. Parallel execution enables comprehensive evidence gathering while maintaining efficiency. Structured output needed for modifier rules."
+→ reasoning: "Modifier question requiring precise policy lookup. Suggesting range routing to CPT 14000 section (pre-filter), then BM25 for exact 'modifier 59' matching, and semantic for policy context. These hints will guide the router's execution strategy. Structured output needed for modifier rules."
 
 **Example 2: Complex Policy Question**
 Query: "Under what circumstances can CPT 14301 be billed separately when performed with complex repair on the same anatomical region, and what modifiers should be used?"
 → question_type: "guideline"
 → keywords: ["CPT 14301", "complex repair", "separately reportable", "modifiers", "anatomical region", "billing guidelines"]
 → complexity: "complex"
-→ strategies: ["range_routing", "hybrid"]
+→ retrieval_strategies: ["range_routing", "hybrid"]  # HINTS for router
 → enable_retry: true, max_retry: 2
 → require_structured_output: true
-→ reasoning: "Complex multi-part question requiring both keyword precision and semantic understanding. Using 2-step pipeline: 1) Range routing to CPT 14000 section (pre-filter), 2) Hybrid search combines BM25 (for exact terms like 'separately reportable', 'modifiers') and semantic (for understanding 'circumstances', 'billing rules') in single pass. Hybrid chosen for efficiency - question needs balanced keyword+semantic coverage without needing to inspect results separately."
+→ reasoning: "Complex multi-part question requiring both keyword precision and semantic understanding. Suggesting range routing to CPT 14000 section, then hybrid search for balanced keyword+semantic coverage. Router will adapt execution based on configured mode."
 
 **Example 3: Narrow Range Question**
 Query: "What are the general guidelines for coding adjacent tissue transfer procedures in the CPT 14000-14350 range?"
 → question_type: "guideline"
 → keywords: ["adjacent tissue transfer", "CPT 14000-14350", "coding guidelines", "procedures"]
 → complexity: "medium"
-→ strategies: ["range_routing", "semantic"]
+→ retrieval_strategies: ["range_routing", "semantic"]  # HINTS for router
 → enable_retry: true, max_retry: 1
 → require_structured_output: true
-→ reasoning: "Range-focused question explicitly requesting section-level guidelines. Range routing retrieves entire CPT 14000-14350 section context. Semantic search identifies relevant guideline passages within that section. Structured output needed for comprehensive guideline summary."
+→ reasoning: "Range-focused question requesting section-level guidelines. Suggesting range routing for CPT 14000-14350 section, then semantic search for conceptual understanding of guidelines. Structured output needed for comprehensive summary."
 
 **Example 4: Conceptual Question (NO CPT code)**
 Query: "What is the difference between complex repair and adjacent tissue transfer?"
 → question_type: "comparison"
 → keywords: ["complex repair", "adjacent tissue transfer", "difference", "comparison"]
 → complexity: "medium"
-→ strategies: ["semantic", "hybrid"]
+→ retrieval_strategies: ["semantic", "hybrid"]  # HINTS for router
 → enable_retry: false, max_retry: 1
 → require_structured_output: true
-→ reasoning: "Conceptual comparison question without specific CPT codes. No range routing needed since no code reference to narrow down. Semantic search for conceptual understanding, hybrid as backup for comprehensive coverage. Structured output for clear comparison table."
+→ reasoning: "Conceptual comparison without specific CPT codes. Suggesting semantic search for conceptual understanding, with hybrid as alternative. No range routing needed since no code reference exists."
 
 ## Now Analyze the User Query
 
