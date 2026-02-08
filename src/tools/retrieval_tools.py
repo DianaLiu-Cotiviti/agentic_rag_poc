@@ -264,7 +264,8 @@ class RetrievalTools:
         # Get semantic results with guidance
         semantic_results = self.semantic_search(query, top_k=top_k * 2, guidance=guidance)
         
-        # Weighted RRF fusion
+        # Layer 1 Reranking: Weighted RRF fusion (Method-level)
+        # Purpose: Combine BM25 (keyword matching) + Semantic (concept matching)
         fused_scores = {}
         
         # Apply BM25 with weight
@@ -440,9 +441,10 @@ class RetrievalTools:
             all_results.extend(results)
         print(f"   合并前总 chunks: {len(all_results)} (包含重复)")
         
-        # Additional RRF fusion across queries
+        # Layer 2 Reranking: RRF fusion across queries (Query-level)
+        # Purpose: Combine results from different sub-queries (multi-perspective)
         fused_scores = self._rrf_fuse(*query_results)
-        print(f"   RRF 融合后去重 chunks: {len(fused_scores)}")
+        print(f"   Layer 2 RRF 融合后去重 chunks: {len(fused_scores)}")
         
         # Boost range routing chunks
         print(f"\n📌 Step 4: Boost Range Routing Chunks (增强预过滤的 chunks)")
