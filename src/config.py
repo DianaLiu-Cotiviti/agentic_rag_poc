@@ -62,6 +62,11 @@ class AgenticRAGConfig(BaseModel):
     min_coverage_score: float = 0.6
     min_specificity_score: float = 0.5
     
+    # Cross-encoder reranking (before Evidence Judge)
+    use_cross_encoder_rerank: bool = True
+    cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+    cross_encoder_top_k: int = 10  # Keep top-K after reranking
+    
     # Agent model settings
     agent_temperature: float = 0
     
