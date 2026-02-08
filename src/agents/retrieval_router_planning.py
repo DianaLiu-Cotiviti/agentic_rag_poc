@@ -349,7 +349,8 @@ class PlanningRetrievalRouter:
         
         return {
             "retrieved_chunks": final_results,
-            "retrieval_metadata": metadata
+            "retrieval_metadata": metadata,
+            "cpt_descriptions": cpt_descriptions if cpt_descriptions else None
         }
     
     def _aggregate_and_rank(self, results: List[RetrievalResult]) -> List[RetrievalResult]:

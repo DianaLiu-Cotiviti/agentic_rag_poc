@@ -196,9 +196,18 @@ class ToolCallingRetrievalRouter:
         )
         metadata["saved_to"] = saved_path
         
+        # Extract CPT descriptions from tool results
+        cpt_descriptions_dict = {}
+        if tool_results.get("cpt_descriptions"):
+            for desc_result in tool_results["cpt_descriptions"]:
+                # desc_result is a dict like {"14301": "Adjacent tissue transfer..."}
+                if isinstance(desc_result, dict):
+                    cpt_descriptions_dict.update(desc_result)
+        
         return {
             "retrieved_chunks": final_results,
-            "retrieval_metadata": metadata
+            "retrieval_metadata": metadata,
+            "cpt_descriptions": cpt_descriptions_dict if cpt_descriptions_dict else None
         }
     
     def _build_tool_definitions(self) -> List[Dict[str, Any]]:

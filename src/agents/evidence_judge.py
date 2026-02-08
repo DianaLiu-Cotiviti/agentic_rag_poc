@@ -105,7 +105,7 @@ class EvidenceJudgeAgent(BaseAgent):
         评估检索证据质量
         
         Args:
-            state: Contains question, question_type, retrieved_chunks, query_candidates
+            state: Contains question, question_type, retrieved_chunks, cpt_descriptions
             
         Returns:
             dict: Contains evidence_assessment
@@ -114,6 +114,7 @@ class EvidenceJudgeAgent(BaseAgent):
         question_type = state.get("question_type", "general")
         chunks = state.get("retrieved_chunks", [])
         retrieval_metadata = state.get("retrieval_metadata", {})
+        cpt_descriptions = state.get("cpt_descriptions", {})  # Get CPT descriptions from state
         
         # 如果没有检索到内容 - 明确insufficient
         if not chunks:
@@ -128,14 +129,40 @@ class EvidenceJudgeAgent(BaseAgent):
                 }
             }
         
+        # Apply cross-encoder reranking if enabled
+        reranked_chunks = chunks  # Keep original for comparison
+        if self.config.use_cross_encoder_rerank and len(chunks) > self.config.cross_encoder_top_k:
+            print(f"\n🔄 Layer 3 Reranking: Cross-Encoder (Question-aware)")
+            print(f"   Purpose: Refine {len(chunks)} chunks to top {self.config.cross_encoder_top_k} based on original question")
+            print(f"   Before: {len(chunks)} chunks (from Layer 1-2 fusion)")
+            reranked_chunks = self._cross_encoder_rerank(question, chunks)
+            print(f"   After: {len(reranked_chunks)} chunks (optimized for Evidence Judge)")
+            retrieval_metadata["cross_encoder_reranked"] = True
+            retrieval_metadata["cross_encoder_model"] = self.config.cross_encoder_model
+            retrieval_metadata["chunks_before_layer3"] = len(chunks)
+            retrieval_metadata["chunks_after_layer3"] = len(reranked_chunks)
+            
+            # Save reranked chunks to file for analysis
+            self._save_reranked_chunks(question, chunks, reranked_chunks, retrieval_metadata)
+        else:
+            if not self.config.use_cross_encoder_rerank:
+                print(f"\n⏭️  Layer 3 Reranking: Skipped (disabled in config)")
+            else:
+                print(f"\n⏭️  Layer 3 Reranking: Skipped (only {len(chunks)} chunks, threshold is {self.config.cross_encoder_top_k})")
+
+        
+        # Use reranked chunks for evaluation
+        chunks_to_judge = reranked_chunks
+        
         # 构建prompt用于LLM评估
         # 注意：只用 original question 和 retrieved chunks 评估
         # 不需要 sub-queries（它们只是检索手段，不是评估目标）
         prompt = self._build_judgment_prompt(
             question=question,
             question_type=question_type,
-            chunks=chunks,
-            retrieval_metadata=retrieval_metadata
+            chunks=chunks_to_judge,
+            retrieval_metadata=retrieval_metadata,
+            cpt_descriptions=cpt_descriptions  # Pass CPT descriptions to prompt builder
         )
         
         # 调用LLM进行结构化评估
@@ -151,6 +178,7 @@ class EvidenceJudgeAgent(BaseAgent):
         
         judgment = response.choices[0].message.parsed
         
+        # Return updated state with reranked chunks
         return {
             "evidence_assessment": {
                 "is_sufficient": judgment.is_sufficient,
@@ -159,7 +187,9 @@ class EvidenceJudgeAgent(BaseAgent):
                 "has_contradiction": judgment.has_contradiction,
                 "missing_aspects": judgment.missing_aspects,
                 "reasoning": judgment.reasoning
-            }
+            },
+            "retrieved_chunks": reranked_chunks,  # Update state with top-10 reranked chunks
+            "retrieval_metadata": retrieval_metadata  # Update metadata with Layer 3 info
         }
     
     def _build_judgment_prompt(
@@ -167,14 +197,15 @@ class EvidenceJudgeAgent(BaseAgent):
         question: str,
         question_type: str,
         chunks: List[RetrievalResult],
-        retrieval_metadata: dict
+        retrieval_metadata: dict,
+        cpt_descriptions: dict = None
     ) -> str:
         """
         构建Evidence Judge的评估prompt
         
         评估逻辑：
         - 评估目标：original question（不是sub-queries）
-        - 评估证据：retrieved chunks（已融合）
+        - 评估证据：retrieved chunks + CPT descriptions（已融合）
         - 评估标准：question_type 对应的 required aspects
         
         Args:
@@ -182,9 +213,17 @@ class EvidenceJudgeAgent(BaseAgent):
             question_type: Question type
             chunks: Retrieved chunks（已融合的15-20个chunks）
             retrieval_metadata: Retrieval metadata
+            cpt_descriptions: CPT code -> description mapping (from retrieval)
         """
         # Format chunks
         chunks_text = self._format_chunks_for_evaluation(chunks)
+        
+        # Format CPT descriptions (if available)
+        cpt_desc_text = ""
+        if cpt_descriptions:
+            cpt_desc_text = "\n\n### 📋 CPT Code Definitions (Retrieved)\n\n"
+            for code, description in cpt_descriptions.items():
+                cpt_desc_text += f"**CPT {code}**: {description}\n\n"
         
         # Extract metadata
         retrieval_mode = retrieval_metadata.get("mode", "unknown")
@@ -194,7 +233,7 @@ class EvidenceJudgeAgent(BaseAgent):
         return build_evidence_judgment_prompt(
             question=question,
             question_type=question_type,
-            chunks_text=chunks_text,
+            chunks_text=chunks_text + cpt_desc_text,  # Append CPT descriptions to chunks
             retrieval_mode=retrieval_mode,
             strategies_used=str(strategies_used),
             total_chunks=len(chunks)
@@ -378,6 +417,189 @@ class EvidenceJudgeAgent(BaseAgent):
             summaries[int(chunk_idx)] = summary.strip()
         
         return summaries
+    
+    def _cross_encoder_rerank(
+        self,
+        query: str,
+        chunks: List[RetrievalResult]
+    ) -> List[RetrievalResult]:
+        """
+        使用Cross-Encoder对chunks重新排序
+        
+        Cross-encoder相比bi-encoder（当前semantic search）的优势：
+        - Bi-encoder: query和doc分别编码，然后计算相似度（快但不准确）
+        - Cross-encoder: query和doc一起编码，考虑交互（慢但准确）
+        
+        适用场景：
+        - Retrieval已经缩小范围（15-20 candidates）
+        - 需要精确排序top 10给Evidence Judge
+        
+        Args:
+            query: Original question
+            chunks: Retrieved chunks from retrieval router
+            
+        Returns:
+            Top-K reranked chunks
+        """
+        try:
+            from sentence_transformers import CrossEncoder
+            
+            # Lazy load model
+            if not hasattr(self, '_cross_encoder'):
+                print(f"   Loading cross-encoder model: {self.config.cross_encoder_model}")
+                self._cross_encoder = CrossEncoder(self.config.cross_encoder_model)
+            
+            # Prepare query-document pairs
+            pairs = [(query, chunk.text[:512]) for chunk in chunks]  # Limit to 512 chars
+            
+            # Score all pairs
+            ce_scores = self._cross_encoder.predict(pairs)
+            
+            # Combine with original chunks
+            chunk_score_pairs = list(zip(chunks, ce_scores))
+            
+            # Sort by cross-encoder score (descending)
+            chunk_score_pairs.sort(key=lambda x: x[1], reverse=True)
+            
+            # Keep top-K
+            top_k = self.config.cross_encoder_top_k
+            reranked_chunks = []
+            
+            for chunk, ce_score in chunk_score_pairs[:top_k]:
+                # Update chunk score to cross-encoder score
+                reranked_chunk = RetrievalResult(
+                    chunk_id=chunk.chunk_id,
+                    score=float(ce_score),  # Replace with CE score
+                    text=chunk.text,
+                    metadata={
+                        **chunk.metadata,
+                        "original_score": chunk.score,  # Keep original for debugging
+                        "ce_score": float(ce_score)
+                    }
+                )
+                reranked_chunks.append(reranked_chunk)
+            
+            print(f"   Score range: {ce_scores.max():.4f} (max) → {ce_scores.min():.4f} (min)")
+            print(f"   Top 5 CE scores: {[f'{s:.4f}' for s in sorted(ce_scores, reverse=True)[:5]]}")
+            
+            return reranked_chunks
+            
+        except ImportError:
+            print("   ⚠️  sentence-transformers not installed, skipping cross-encoder reranking")
+            print("   Install with: pip install sentence-transformers")
+            return chunks[:self.config.cross_encoder_top_k]
+        except Exception as e:
+            print(f"   ⚠️  Cross-encoder reranking failed: {e}")
+            return chunks[:self.config.cross_encoder_top_k]
+    
+    def _save_reranked_chunks(
+        self,
+        question: str,
+        original_chunks: List[RetrievalResult],
+        reranked_chunks: List[RetrievalResult],
+        metadata: dict
+    ) -> None:
+        """
+        保存Layer 3 reranking结果，用于分析和调试
+        
+        保存内容：
+        - Before reranking: 原始15-20个chunks及其分数
+        - After reranking: Top 10 chunks及其CE分数
+        - Score comparison: 排序变化
+        
+        Args:
+            question: Original user question
+            original_chunks: Chunks before Layer 3 reranking
+            reranked_chunks: Chunks after Layer 3 reranking (top 10)
+            metadata: Retrieval metadata
+        """
+        import json
+        from datetime import datetime
+        from pathlib import Path
+        
+        try:
+            # Create output directory
+            output_dir = Path(self.config.retrieval_output_dir) / "layer3_reranking"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"layer3_rerank_{timestamp}.json"
+            filepath = output_dir / filename
+            
+            # Prepare comparison data
+            comparison = {
+                "question": question,
+                "timestamp": timestamp,
+                "metadata": {
+                    "cross_encoder_model": metadata.get("cross_encoder_model", "unknown"),
+                    "chunks_before": len(original_chunks),
+                    "chunks_after": len(reranked_chunks),
+                    "retrieval_mode": metadata.get("mode", "unknown")
+                },
+                "before_reranking": [
+                    {
+                        "rank": i + 1,
+                        "chunk_id": chunk.chunk_id,
+                        "score": chunk.score,
+                        "text_preview": chunk.text[:200] + "..." if len(chunk.text) > 200 else chunk.text,
+                        "cpt_code": chunk.metadata.get("cpt_code")
+                    }
+                    for i, chunk in enumerate(original_chunks)
+                ],
+                "after_reranking": [
+                    {
+                        "rank": i + 1,
+                        "chunk_id": chunk.chunk_id,
+                        "ce_score": chunk.score,  # Cross-encoder score
+                        "original_score": chunk.metadata.get("original_score", 0.0),
+                        "text_preview": chunk.text[:200] + "..." if len(chunk.text) > 200 else chunk.text,
+                        "cpt_code": chunk.metadata.get("cpt_code"),
+                        "rank_change": self._calculate_rank_change(chunk.chunk_id, original_chunks, i)
+                    }
+                    for i, chunk in enumerate(reranked_chunks)
+                ],
+                "score_statistics": {
+                    "original_score_range": f"{original_chunks[0].score:.4f} → {original_chunks[-1].score:.4f}",
+                    "ce_score_range": f"{reranked_chunks[0].score:.4f} → {reranked_chunks[-1].score:.4f}",
+                    "dropped_chunks": len(original_chunks) - len(reranked_chunks)
+                }
+            }
+            
+            # Save to file
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(comparison, f, indent=2, ensure_ascii=False)
+            
+            print(f"   💾 Layer 3 reranking results saved to: {filepath}")
+            
+        except Exception as e:
+            print(f"   ⚠️  Failed to save reranking results: {e}")
+    
+    def _calculate_rank_change(
+        self,
+        chunk_id: str,
+        original_chunks: List[RetrievalResult],
+        new_rank: int
+    ) -> str:
+        """
+        计算排序变化
+        
+        Returns:
+            "+5" (上升5位), "-3" (下降3位), "new" (新进top 10)
+        """
+        # Find original rank
+        for i, chunk in enumerate(original_chunks):
+            if chunk.chunk_id == chunk_id:
+                old_rank = i
+                change = old_rank - new_rank
+                if change > 0:
+                    return f"+{change}"  # 上升
+                elif change < 0:
+                    return f"{change}"  # 下降
+                else:
+                    return "0"  # 不变
+        
+        return "new"  # 不在原始列表中（不应该发生）
     
     def _extract_chunk_data(self, chunk) -> tuple:
         """提取chunk数据（兼容dict和对象）"""

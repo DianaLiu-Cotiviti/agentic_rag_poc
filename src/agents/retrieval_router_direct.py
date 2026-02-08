@@ -127,6 +127,7 @@ class DirectRetrievalRouter:
         
         return {
             "retrieved_chunks": results,
-            "retrieval_metadata": metadata
+            "retrieval_metadata": metadata,
+            "cpt_descriptions": cpt_descriptions if cpt_descriptions else None
         }
 
