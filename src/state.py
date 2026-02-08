@@ -79,6 +79,7 @@ class AgenticRAGState(TypedDict):
     # ========== Retrieval outputs ==========
     retrieved_chunks: List[RetrievalResult]
     retrieval_metadata: Dict[str, Any]
+    cpt_descriptions: Optional[Dict[str, str]]  # CPT code -> description mapping (used during retrieval)
     
     # ========== Evidence Judge outputs ==========
     evidence_assessment: Optional[EvidenceAssessment]
