@@ -17,6 +17,7 @@ from ..prompts.evidence_judge_prompts import (
     EVIDENCE_JUDGE_SYSTEM_MESSAGE,
     build_evidence_judgment_prompt
 )
+from ..utils.save_workflow_outputs import save_top10_chunks
 
 
 class EvidenceJudgment(BaseModel):
@@ -155,18 +156,20 @@ class EvidenceJudgeAgent(BaseAgent):
             retrieval_metadata["chunks_before_layer3"] = len(chunks)
             retrieval_metadata["chunks_after_layer3"] = len(reranked_chunks)
             
-            # Save reranking results for analysis
-            from ..utils.save_workflow_outputs import save_reranked_chunks
-            try:
-                saved_path = save_reranked_chunks(
-                    question=question,
-                    original_chunks=chunks,
-                    reranked_chunks=reranked_chunks,
-                    metadata=retrieval_metadata
-                )
-                print(f"   💾 Reranking results saved to: {saved_path}")
-            except Exception as e:
-                print(f"   ⚠️  Failed to save reranking results: {e}")
+            # 保存top 10 chunks作为LLM回答的依据
+            mode = retrieval_metadata.get('mode', 'unknown')
+            save_path = save_top10_chunks(
+                top10_chunks=reranked_chunks,
+                question=state.get('question', ''),
+                output_dir=self.config.retrieval_output_dir,
+                metadata={
+                    'mode': mode,
+                    'original_chunks_count': len(chunks),
+                    'reranked_to_top': len(reranked_chunks),
+                    'layer': 'layer3_cross_encoder'
+                }
+            )
+            print(f"   💾 Top 10 chunks saved to: {save_path}")
         else:
             # Cross-encoder disabled or not enough chunks - use score-based top-K
             if not self.config.use_cross_encoder_rerank:
@@ -183,6 +186,21 @@ class EvidenceJudgeAgent(BaseAgent):
             else:
                 print(f"   📊 Using all {len(chunks)} chunks (no truncation needed)")
                 retrieval_metadata["cross_encoder_reranked"] = False
+            
+            # 保存top 10 chunks作为LLM回答的依据 (score-based版本)
+            mode = retrieval_metadata.get('mode', 'unknown')
+            save_path = save_top10_chunks(
+                top10_chunks=reranked_chunks,
+                question=state.get('question', ''),
+                output_dir=self.config.retrieval_output_dir,
+                metadata={
+                    'mode': mode,
+                    'original_chunks_count': len(chunks),
+                    'reranked_to_top': len(reranked_chunks),
+                    'layer': 'layer1_layer2_score_based'
+                }
+            )
+            print(f"   💾 Top {len(reranked_chunks)} chunks saved to: {save_path}")
 
         
         # Use reranked chunks for evaluation
