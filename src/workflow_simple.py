@@ -3,16 +3,19 @@ Simple Agentic RAG Workflow - 无Iteration版本
 ==============================================
 
 这是一个简化的workflow，用于验证基本的agent pipeline：
-User Query → Orchestrator → Query Planner → Retrieval Router → Evidence Judge → END
+User Query → Orchestrator → Query Planner → Retrieval Router → Evidence Judge 
+         → (if sufficient) Answer Generator → END
+         → (if insufficient) END (为后续 Query Refiner 预留)
 
-不包含:
-- Query Refiner (retry逻辑)
-- Structured Extraction (最终答案生成)
+包含:
+- Evidence Judge 的 sufficiency 判断
+- Conditional edge: sufficient → answer, insufficient → END
+- Answer Generator: 基于 top 10 chunks 生成答案
 
 用于测试每个agent是否正确连接和工作。
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Literal
 from langgraph.graph import StateGraph, END
 
 from .state import AgenticRAGState
@@ -80,15 +83,28 @@ class SimpleAgenticRAGWorkflow:
         workflow.add_node("query_planner", self._query_planner_node)
         workflow.add_node("retrieval", self._retrieval_node)
         workflow.add_node("evidence_judge", self._evidence_judge_node)
+        workflow.add_node("answer_generator", self._answer_generator_node)  # NEW
         
         # 设置入口
         workflow.set_entry_point("orchestrator")
         
-        # 添加边（简单的线性流程）
+        # 添加边
         workflow.add_edge("orchestrator", "query_planner")
         workflow.add_edge("query_planner", "retrieval")
         workflow.add_edge("retrieval", "evidence_judge")
-        workflow.add_edge("evidence_judge", END)
+        
+        # Conditional edge: Evidence Judge → Answer Generator (if sufficient) or END (if insufficient)
+        workflow.add_conditional_edges(
+            "evidence_judge",
+            self._should_generate_answer,
+            {
+                "generate": "answer_generator",  # Evidence is sufficient → generate answer
+                "end": END  # Evidence is insufficient → end (retry logic will be added later)
+            }
+        )
+        
+        # Answer Generator → END
+        workflow.add_edge("answer_generator", END)
         
         return workflow.compile()
     
@@ -240,11 +256,76 @@ class SimpleAgenticRAGWorkflow:
         print(f"Is Sufficient: {assessment.get('is_sufficient')}")
         print(f"Coverage Score: {assessment.get('coverage_score', 0):.2f}")
         print(f"Specificity Score: {assessment.get('specificity_score', 0):.2f}")
-
         print(f"Has Contradiction: {assessment.get('has_contradiction')}")
         if assessment.get('missing_aspects'):
             print(f"Missing Aspects: {assessment.get('missing_aspects')}")
         print(f"\nReasoning:\n{assessment.get('reasoning', 'N/A')[:300]}...")
+        
+        state.update(result)
+        return state
+    
+    def _should_generate_answer(self, state: AgenticRAGState) -> Literal["generate", "end"]:
+        """
+        Conditional edge: 判断是否生成答案
+        
+        Decision Logic:
+        - If evidence is sufficient → "generate" (进入 Answer Generator)
+        - If evidence is insufficient → "end" (结束，等待后续添加 Query Refiner)
+        
+        Args:
+            state: Current state with evidence_assessment
+            
+        Returns:
+            "generate" or "end"
+        """
+        assessment = state.get("evidence_assessment")
+        
+        # Safety check
+        if not assessment:
+            print("\n⚠️  No evidence assessment found, ending workflow")
+            return "end"
+        
+        is_sufficient = assessment.get("is_sufficient", False)
+        
+        if is_sufficient:
+            print("\n✅ Evidence is SUFFICIENT → Proceeding to Answer Generator")
+            return "generate"
+        else:
+            print("\n❌ Evidence is INSUFFICIENT → Ending workflow")
+            print("   (Query Refiner will be added in future iteration)")
+            return "end"
+    
+    def _answer_generator_node(self, state: AgenticRAGState) -> AgenticRAGState:
+        """
+        Answer Generator节点
+        
+        职责:
+        1. 接收 top 10 chunks (validated as sufficient)
+        2. 基于 original question 生成答案
+        3. 返回 final_answer (with citations, key_points, confidence)
+        """
+        print("\n" + "="*80)
+        print("💬 Step 5: Answer Generator - Generating final answer...")
+        print("="*80)
+        
+        result = self.agents.answer_generator_node(state)
+        
+        final_answer = result.get('final_answer', {})
+        print(f"\n📝 Generated Answer:")
+        print(f"{final_answer.get('answer', 'N/A')[:500]}...")
+        
+        if final_answer.get('key_points'):
+            print(f"\n🔑 Key Points:")
+            for i, point in enumerate(final_answer.get('key_points', [])[:5], 1):
+                print(f"   {i}. {point}")
+        
+        print(f"\n📚 Citations: {len(final_answer.get('citations', []))} chunks referenced")
+        print(f"🎯 Confidence: {final_answer.get('confidence', 0):.2f}")
+        
+        if final_answer.get('limitations'):
+            print(f"\n⚠️  Limitations:")
+            for limitation in final_answer.get('limitations', []):
+                print(f"   • {limitation}")
         
         state.update(result)
         return state
