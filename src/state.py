@@ -85,6 +85,9 @@ class AgenticRAGState(TypedDict):
     evidence_assessment: Optional[EvidenceAssessment]
     retry_count: int
     
+    # ========== Answer Generator outputs ==========
+    final_answer: Optional[Dict[str, Any]]  # Generated answer with citations
+    
     # ========== Query Refiner outputs (for retry loop) ==========
     # refined_queries: List[str]
     
