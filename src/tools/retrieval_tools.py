@@ -499,3 +499,126 @@ class RetrievalTools:
         print(f"{'='*100}\n")
         
         return final_results, retrieval_stats
+    
+    def cross_encoder_rerank(
+        self,
+        query: str,
+        chunks: List[RetrievalResult],
+        top_k: int = 10,
+        model_name: str = None
+    ) -> List[RetrievalResult]:
+        """
+        Layer 3 Reranking: Cross-Encoder对chunks重新排序
+        
+        Cross-encoder vs Bi-encoder:
+        - Bi-encoder (Semantic Search): query和doc分别编码，余弦相似度（快，适合大规模）
+        - Cross-encoder: query+doc一起编码，深度交互（慢，适合精排）
+        
+        使用场景:
+        - Layer 1-2已经缩小范围到15-20个候选chunks
+        - 需要基于original question精确排序top 10
+        - Evidence Judge或Answer Generator需要高质量输入
+        
+        Args:
+            query: Original user question
+            chunks: Retrieved chunks (typically 15-20 from Layer 1-2)
+            top_k: Number of top chunks to return (default: 10)
+            model_name: Cross-encoder model name (override config)
+            
+        Returns:
+            Top-K reranked chunks with updated scores
+            
+        Example:
+            >>> chunks = retrieval_tools.multi_query_hybrid_search(...)  # 20 chunks
+            >>> top10 = retrieval_tools.cross_encoder_rerank(
+            ...     query="What is CPT 14301?",
+            ...     chunks=chunks,
+            ...     top_k=10
+            ... )
+            >>> # top10 are the most relevant to the question
+        """
+        try:
+            from sentence_transformers import CrossEncoder
+            import time
+            
+            # Use provided model or config default
+            model = model_name or self.config.cross_encoder_model
+            
+            # Lazy load cross-encoder model with retry mechanism
+            if not hasattr(self, '_cross_encoder') or self._cross_encoder_model != model:
+                print(f"   📦 Loading cross-encoder: {model}")
+                
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        self._cross_encoder = CrossEncoder(
+                            model,
+                            max_length=512,  # Explicit max length
+                            device=None  # Auto-detect device (CPU/GPU)
+                        )
+                        self._cross_encoder_model = model
+                        print(f"   ✅ Cross-encoder loaded successfully")
+                        break
+                    except Exception as load_error:
+                        if attempt < max_retries - 1:
+                            print(f"   ⚠️  Load attempt {attempt + 1} failed: {load_error}")
+                            print(f"   🔄 Retrying in 2 seconds...")
+                            time.sleep(2)
+                        else:
+                            raise load_error
+            
+            # Prepare query-document pairs (limit text length for efficiency)
+            pairs = [(query, chunk.text[:512]) for chunk in chunks]
+            
+            # Batch predict scores
+            ce_scores = self._cross_encoder.predict(pairs)
+            
+            # Combine chunks with CE scores
+            chunk_score_pairs = list(zip(chunks, ce_scores))
+            
+            # Sort by cross-encoder score (descending)
+            chunk_score_pairs.sort(key=lambda x: x[1], reverse=True)
+            
+            # Keep top-K
+            reranked_chunks = []
+            for chunk, ce_score in chunk_score_pairs[:top_k]:
+                # Create new RetrievalResult with updated score
+                reranked_chunk = RetrievalResult(
+                    chunk_id=chunk.chunk_id,
+                    score=float(ce_score),  # Replace with CE score
+                    text=chunk.text,
+                    metadata={
+                        **chunk.metadata,
+                        "original_score": chunk.score,  # Keep for comparison
+                        "ce_score": float(ce_score),
+                        "reranked_by": "cross_encoder"
+                    }
+                )
+                reranked_chunks.append(reranked_chunk)
+            
+            # Print statistics
+            print(f"   📊 CE Score range: {ce_scores.max():.4f} (max) → {ce_scores.min():.4f} (min)")
+            print(f"   🏆 Top 5 scores: {[f'{s:.4f}' for s in sorted(ce_scores, reverse=True)[:5]]}")
+            
+            return reranked_chunks
+            
+        except ImportError:
+            print("   ⚠️  sentence-transformers not installed, skipping reranking")
+            print("   💡 Install with: pip install sentence-transformers")
+            return chunks[:top_k]
+        except Exception as e:
+            error_msg = str(e)
+            print(f"   ❌ Cross-encoder reranking failed: {error_msg}")
+            
+            # Provide helpful troubleshooting
+            if "Can't load the model" in error_msg or "pytorch_model.bin" in error_msg:
+                print(f"   💡 Troubleshooting:")
+                print(f"      1. Model download may be incomplete - try running again")
+                print(f"      2. Check internet connection")
+                print(f"      3. Try alternative model: cross-encoder/ms-marco-MiniLM-L-6-v2 (smaller)")
+                print(f"      4. Set HF_TOKEN for faster downloads: export HF_TOKEN=your_token")
+                print(f"      5. Or disable cross-encoder in config: use_cross_encoder_rerank=False")
+            
+            print(f"   ↩️  Falling back to original top-{top_k}")
+            return chunks[:top_k]
+

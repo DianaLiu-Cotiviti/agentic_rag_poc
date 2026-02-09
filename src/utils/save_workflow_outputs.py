@@ -111,3 +111,93 @@ def save_query_candidates(
         json.dump(data, f, indent=2, ensure_ascii=False)
     
     return filepath
+
+
+def save_reranked_chunks(
+    question: str,
+    original_chunks: List[Any],
+    reranked_chunks: List[Any],
+    metadata: Dict[str, Any] = None,
+    output_dir: str = "output/retrievals/layer3_reranking"
+) -> str:
+    """
+    保存Layer 3 cross-encoder reranking的结果
+    
+    用于分析和调试reranking效果：
+    - 比较reranking前后的排序变化
+    - 查看CE分数 vs 原始分数
+    - 分析哪些chunks被提升/降低/过滤
+    
+    Args:
+        question: Original user question
+        original_chunks: Chunks before reranking (15-20 from Layer 1-2)
+        reranked_chunks: Chunks after reranking (top 10)
+        metadata: Metadata including cross_encoder_model, mode, etc.
+        output_dir: Output directory path
+        
+    Returns:
+        str: Saved file path
+    """
+    # 创建输出目录
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # 生成文件名（基于时间戳）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"layer3_rerank_{timestamp}.json"
+    filepath = os.path.join(output_dir, filename)
+    
+    # 计算排序变化
+    def calculate_rank_change(chunk_id: str, old_rank: int) -> str:
+        """计算排序变化"""
+        for i, chunk in enumerate(reranked_chunks):
+            cid = getattr(chunk, 'chunk_id', chunk.get('chunk_id', '') if isinstance(chunk, dict) else '')
+            if cid == chunk_id:
+                new_rank = i
+                change = old_rank - new_rank
+                return f"+{change}" if change > 0 else f"{change}" if change < 0 else "0"
+        return "dropped"
+    
+    # 准备保存的数据
+    data = {
+        "timestamp": datetime.now().isoformat(),
+        "question": question,
+        "metadata": {
+            "cross_encoder_model": metadata.get("cross_encoder_model", "unknown") if metadata else "unknown",
+            "retrieval_mode": metadata.get("mode", "unknown") if metadata else "unknown",
+            "chunks_before_rerank": len(original_chunks),
+            "chunks_after_rerank": len(reranked_chunks),
+            "chunks_dropped": len(original_chunks) - len(reranked_chunks)
+        },
+        "before_reranking": [
+            {
+                "rank": i + 1,
+                "chunk_id": getattr(chunk, 'chunk_id', ''),
+                "score": getattr(chunk, 'score', 0.0),
+                "text_preview": (getattr(chunk, 'text', '')[:200] + "...") if len(getattr(chunk, 'text', '')) > 200 else getattr(chunk, 'text', ''),
+                "cpt_code": getattr(chunk, 'metadata', {}).get('cpt_code'),
+                "rank_change": calculate_rank_change(getattr(chunk, 'chunk_id', ''), i)
+            }
+            for i, chunk in enumerate(original_chunks)
+        ],
+        "after_reranking": [
+            {
+                "rank": i + 1,
+                "chunk_id": getattr(chunk, 'chunk_id', ''),
+                "ce_score": getattr(chunk, 'score', 0.0),
+                "original_score": getattr(chunk, 'metadata', {}).get('original_score', 0.0),
+                "text_preview": (getattr(chunk, 'text', '')[:200] + "...") if len(getattr(chunk, 'text', '')) > 200 else getattr(chunk, 'text', ''),
+                "cpt_code": getattr(chunk, 'metadata', {}).get('cpt_code')
+            }
+            for i, chunk in enumerate(reranked_chunks)
+        ],
+        "score_statistics": {
+            "original_score_range": f"{getattr(original_chunks[0], 'score', 0):.4f} → {getattr(original_chunks[-1], 'score', 0):.4f}" if original_chunks else "N/A",
+            "ce_score_range": f"{getattr(reranked_chunks[0], 'score', 0):.4f} → {getattr(reranked_chunks[-1], 'score', 0):.4f}" if reranked_chunks else "N/A"
+        }
+    }
+    
+    # 保存到文件
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    return filepath
