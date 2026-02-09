@@ -81,6 +81,21 @@ def test_simple_workflow():
                 for aspect in missing:
                     print(f"      • {aspect}")
         
+        # Show Answer Generator output if available
+        final_answer = result.get('final_answer')
+        if final_answer:
+            print(f"\n5️⃣  Answer Generator:")
+            print(f"   Answer Preview: {final_answer.get('answer', 'N/A')[:150]}...")
+            print(f"   Key Points: {len(final_answer.get('key_points', []))}")
+            citation_map = final_answer.get('citation_map', {})
+            print(f"   Citations: {len(citation_map)} chunks")
+            print(f"   Confidence: {final_answer.get('confidence', 0):.2f}")
+            if final_answer.get('limitations'):
+                print(f"   Limitations: {len(final_answer.get('limitations', []))} noted")
+        else:
+            print(f"\n5️⃣  Answer Generator:")
+            print(f"   Skipped (evidence insufficient)")
+        
         print("\n" + "="*80)
         print("✅ All steps completed successfully!")
         print("="*80)
@@ -96,6 +111,11 @@ def test_simple_workflow():
             ("Coverage score in valid range", 0 <= assessment.get('coverage_score', -1) <= 1),
             ("Specificity score in valid range", 0 <= assessment.get('specificity_score', -1) <= 1),
         ]
+        
+        # Add answer generator check if evidence was sufficient
+        if assessment.get('is_sufficient'):
+            checks.append(("Answer Generator provided answer", final_answer is not None))
+            checks.append(("Answer has citations", len(final_answer.get('citations', [])) > 0 if final_answer else False))
         
         print("\n📋 Validation Checks:")
         all_passed = True

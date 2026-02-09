@@ -24,6 +24,7 @@ from .memory import WorkflowMemory
 from .agents_coordinator import AgenticRAGAgents
 from .tools.retrieval_tools import RetrievalTools
 from .tools.build_indexes import ensure_all_indexes
+from .utils.save_workflow_outputs import save_query_candidates, save_retrieved_chunks, save_final_answer
 
 
 class SimpleAgenticRAGWorkflow:
@@ -198,14 +199,13 @@ class SimpleAgenticRAGWorkflow:
         # Show detailed execution based on mode
         execution_log = metadata.get('execution_log', [])
         if execution_log:
-            # Tool calling mode - show iteration details
+            # Tool calling mode - show tool call details
             print(f"\n📊 Tool Calling Execution Summary:")
-            print(f"   Total iterations: {metadata.get('total_iterations', 0)}")
             print(f"   Total tool calls: {metadata.get('total_tool_calls', 0)}")
             
             print(f"\n  Detailed execution log:")
-            for log in execution_log:
-                print(f"    Iter {log['iteration']}: {log['tool_name']}(", end="")
+            for i, log in enumerate(execution_log, 1):
+                print(f"    Call #{i}: {log['tool_name']}(", end="")
                 args_str = ", ".join(f"{k}={v}" for k, v in list(log['arguments'].items())[:2])
                 print(f"{args_str}...) → {log['chunks_returned']} chunks")
         else:
@@ -266,33 +266,56 @@ class SimpleAgenticRAGWorkflow:
     
     def _should_generate_answer(self, state: AgenticRAGState) -> Literal["generate", "end"]:
         """
-        Conditional edge: 判断是否生成答案
+        Conditional edge: 判断是否生成答案（根据 mode 采用不同策略）
         
-        Decision Logic:
-        - If evidence is sufficient → "generate" (进入 Answer Generator)
-        - If evidence is insufficient → "end" (结束，等待后续添加 Query Refiner)
+        Decision Logic by Mode:
+        
+        **Direct Mode** (0 LLM calls):
+        - 直接生成答案，不判断 sufficiency
+        - 理由: Direct mode 已经使用固定的 hybrid+RRF 策略，结果稳定可靠
+        
+        **Planning Mode** (1 LLM call):
+        - 判断 evidence sufficiency
+        - If sufficient → "generate" (进入 Answer Generator)
+        - If insufficient → "end" (TODO: 添加 Query Refiner retry)
+        
+        **Tool Calling Mode** (5-15 LLM calls):
+        - 判断 evidence sufficiency
+        - If sufficient → "generate" (进入 Answer Generator)
+        - If insufficient → "end" (TODO: 添加 Query Refiner retry)
         
         Args:
-            state: Current state with evidence_assessment
+            state: Current state with evidence_assessment and retrieval_metadata
             
         Returns:
             "generate" or "end"
         """
+        # Get retrieval mode from metadata
+        retrieval_metadata = state.get("retrieval_metadata", {})
+        mode = retrieval_metadata.get("mode", self.config.retrieval_mode)
+        
+        # Direct mode: 直接生成答案，不判断 sufficiency
+        if mode == "direct":
+            print("\n✅ Direct Mode: Skipping sufficiency check → Proceeding to Answer Generator")
+            print("   (Direct mode uses stable hybrid+RRF strategy, always generates answer)")
+            return "generate"
+        
+        # Planning & Tool Calling modes: 判断 sufficiency
         assessment = state.get("evidence_assessment")
         
         # Safety check
         if not assessment:
-            print("\n⚠️  No evidence assessment found, ending workflow")
+            print(f"\n⚠️  No evidence assessment found for {mode} mode, ending workflow")
             return "end"
         
         is_sufficient = assessment.get("is_sufficient", False)
         
         if is_sufficient:
-            print("\n✅ Evidence is SUFFICIENT → Proceeding to Answer Generator")
+            print(f"\n✅ {mode.title()} Mode: Evidence is SUFFICIENT → Proceeding to Answer Generator")
             return "generate"
         else:
-            print("\n❌ Evidence is INSUFFICIENT → Ending workflow")
-            print("   (Query Refiner will be added in future iteration)")
+            print(f"\n❌ {mode.title()} Mode: Evidence is INSUFFICIENT → Ending workflow")
+            print("   (Query Refiner retry will be added in future iteration)")
             return "end"
     
     def _answer_generator_node(self, state: AgenticRAGState) -> AgenticRAGState:
@@ -319,13 +342,32 @@ class SimpleAgenticRAGWorkflow:
             for i, point in enumerate(final_answer.get('key_points', [])[:5], 1):
                 print(f"   {i}. {point}")
         
-        print(f"\n📚 Citations: {len(final_answer.get('citations', []))} chunks referenced")
+        citation_map = final_answer.get('citation_map', {})
+        print(f"\n📚 Citations: {len(citation_map)} chunks referenced")
+        if citation_map:
+            print(f"   Citation mapping: [1]-[{max(citation_map.keys())}] → {len(citation_map)} chunks")
         print(f"🎯 Confidence: {final_answer.get('confidence', 0):.2f}")
         
         if final_answer.get('limitations'):
             print(f"\n⚠️  Limitations:")
             for limitation in final_answer.get('limitations', []):
                 print(f"   • {limitation}")
+        
+        # 保存Answer Generator的输出到 output/responses/
+        retrieval_metadata = state.get('retrieval_metadata', {})
+        metadata = {
+            'mode': retrieval_metadata.get('mode', self.config.retrieval_mode),
+            'num_chunks': len(state.get('retrieved_chunks', [])),
+            'is_sufficient': state.get('evidence_assessment', {}).get('is_sufficient', True)
+        }
+        
+        save_path = save_final_answer(
+            final_answer=final_answer,
+            question=state.get('question', ''),
+            output_dir=self.config.response_output_dir,
+            metadata=metadata
+        )
+        print(f"\n💾 Final answer saved to: {save_path}")
         
         state.update(result)
         return state
