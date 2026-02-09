@@ -35,6 +35,7 @@ class AgenticRAGConfig(BaseModel):
     query_output_dir: str = "output/queries"
     eval_output_dir: str = "output/evaluations"
     retrieval_output_dir: str = "output/retrievals"  # Retrieved chunks
+    response_output_dir: str = "output/responses"  # Final answers from Answer Generator
     
     # Memory paths
     memory_dir: str = "memory"  # Workflow execution history (project root level)
@@ -53,7 +54,7 @@ class AgenticRAGConfig(BaseModel):
     azure_deployment_name_embedding: Optional[str] = None
     
     # Retrieval settings
-    retrieval_mode: str = "tool_calling"  # "direct" | "planning" | "tool_calling"
+    retrieval_mode: str = "direct"  # "direct" | "planning" | "tool_calling"
     top_k: int = 15
     max_retry: int = 2
     rrf_k: int = 60

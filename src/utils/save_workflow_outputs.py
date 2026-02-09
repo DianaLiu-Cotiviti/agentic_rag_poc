@@ -4,7 +4,7 @@
 包含的输出类型：
 - Retrieved chunks (检索到的文档块)
 - Query candidates (生成的查询候选)
-- 未来可扩展：Evaluations, Final answers等
+- Final answers (Answer Generator最终回答)
 """
 import json
 import os
@@ -103,6 +103,101 @@ def save_query_candidates(
                 "weight": getattr(qc, 'weight', qc.get('weight', 1.0) if isinstance(qc, dict) else 1.0)
             }
             for qc in query_candidates
+        ]
+    }
+    
+    # 保存到文件
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    return filepath
+
+
+def save_final_answer(
+    final_answer: Dict[str, Any],
+    question: str,
+    output_dir: str = "output/responses",
+    metadata: Dict[str, Any] = None
+) -> str:
+    """
+    保存Answer Generator生成的最终回答到output/responses目录
+    
+    Args:
+        final_answer: CitedAnswer object (dict with answer, key_points, citations, etc.)
+        question: Original question
+        output_dir: Output directory path
+        metadata: Additional metadata (mode, num_chunks, sufficiency, etc.)
+        
+    Returns:
+        str: Saved file path
+    """
+    # 创建输出目录
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # 生成文件名（基于mode和时间戳）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    mode = metadata.get('mode', 'unknown') if metadata else 'unknown'
+    filename = f"answer_{mode}_{timestamp}.json"
+    filepath = os.path.join(output_dir, filename)
+    
+    # 准备保存的数据
+    data = {
+        "timestamp": datetime.now().isoformat(),
+        "question": question,
+        "metadata": metadata or {},
+        "final_answer": final_answer
+    }
+    
+    # 保存到文件
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    return filepath
+
+
+def save_top10_chunks(
+    top10_chunks: List[Any],
+    question: str,
+    output_dir: str = "output/retrievals",
+    metadata: Dict[str, Any] = None
+) -> str:
+    """
+    保存Evidence Judge Layer 3 reranking后的top 10 chunks到output/retrievals目录
+    这些是LLM生成答案的直接依据
+    
+    Args:
+        top10_chunks: Top 10 chunks after cross-encoder reranking
+        question: Original question
+        output_dir: Output directory path
+        metadata: Additional metadata (mode, original_count, etc.)
+        
+    Returns:
+        str: Saved file path
+    """
+    # 创建输出目录
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # 生成文件名（包含mode和时间戳）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    mode = metadata.get('mode', 'unknown') if metadata else 'unknown'
+    filename = f"top10_chunks_{mode}_{timestamp}.json"
+    filepath = os.path.join(output_dir, filename)
+    
+    # 准备保存的数据
+    data = {
+        "timestamp": datetime.now().isoformat(),
+        "question": question,
+        "num_chunks": len(top10_chunks),
+        "metadata": metadata or {},
+        "top10_chunks": [
+            {
+                "rank": i + 1,
+                "chunk_id": getattr(chunk, 'chunk_id', ''),
+                "score": getattr(chunk, 'score', 0.0),
+                "text": getattr(chunk, 'text', ''),
+                "metadata": getattr(chunk, 'metadata', {})
+            }
+            for i, chunk in enumerate(top10_chunks)
         ]
     }
     
