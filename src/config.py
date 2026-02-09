@@ -64,7 +64,7 @@ class AgenticRAGConfig(BaseModel):
     
     # Cross-encoder reranking (before Evidence Judge)
     use_cross_encoder_rerank: bool = True
-    cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+    cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # Smaller, more reliable
     cross_encoder_top_k: int = 10  # Keep top-K after reranking
     
     # Agent model settings
