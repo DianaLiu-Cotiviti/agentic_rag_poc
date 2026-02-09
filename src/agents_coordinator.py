@@ -33,6 +33,7 @@ from src.agents import (
     StructuredExtractionAgent,
     RetrievalRouterAgent,
 )
+from src.agents.answer_generator import AnswerGeneratorAgent
 
 
 class AgenticRAGAgents:
@@ -67,6 +68,7 @@ class AgenticRAGAgents:
         self.orchestrator = OrchestratorAgent(config)
         self.query_planner = QueryPlannerAgent(config)
         self.evidence_judge = EvidenceJudgeAgent(config)
+        self.answer_generator = AnswerGeneratorAgent(config)  # NEW: Answer Generator
         # self.query_refiner = QueryRefinerAgent(config)
         # self.structured_extraction = StructuredExtractionAgent(config)
         
@@ -151,6 +153,14 @@ class AgenticRAGAgents:
         评估检索证据的充分性（使用三层chunk formatting + LLM总结）
         """
         return self.evidence_judge.process(state)
+    
+    def answer_generator_node(self, state: AgenticRAGState) -> dict:
+        """
+        Answer Generator节点
+        
+        基于 sufficient evidence (top 10 chunks) 生成最终答案
+        """
+        return self.answer_generator.process(state)
     
     # def query_refiner_node(self, state: AgenticRAGState) -> dict:
     #     """

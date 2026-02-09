@@ -648,9 +648,23 @@ class ToolCallingRetrievalRouter:
             
             final_results = self._fuse_results(all_results, rrf_k=60)[:20]
         
+        # Build strategies_used list for reporting
+        strategies_used = []
+        if tool_results["range_routing"]:
+            strategies_used.append("range_routing")
+        if tool_results["bm25_search"]:
+            strategies_used.append("bm25")
+        if tool_results["semantic_search"]:
+            strategies_used.append("semantic")
+        if tool_results["hybrid_search"]:
+            strategies_used.append("hybrid")
+        if tool_results["rrf_fusion"]:
+            strategies_used.append("rrf_fusion")
+        
         # Build metadata
         metadata = {
             "mode": "tool_calling",
+            "strategies_used": strategies_used,  # Record strategies used by LLM
             "range_routing_calls": len(tool_results["range_routing"]),
             "bm25_calls": len(tool_results["bm25_search"]),
             "semantic_calls": len(tool_results["semantic_search"]),
