@@ -59,8 +59,10 @@ class ToolCallingRetrievalRouter:
         """
         LLM驱动的工具调用模式
         
+        Supports retry mode: uses refined_queries when retry_count > 0
+        
         Args:
-            state: Contains question, question_type, retrieval_strategies, query_candidates
+            state: Contains question, query_candidates/refined_queries, retry_count, keep_chunks
             
         Returns:
             dict: Contains retrieved_chunks and retrieval_metadata
@@ -68,11 +70,30 @@ class ToolCallingRetrievalRouter:
         question = state["question"]
         question_type = state.get("question_type", "general")
         retrieval_strategies = state.get("retrieval_strategies", ["hybrid"])
-        query_candidates = state.get("query_candidates", [])
         question_keywords = state.get("question_keywords", [])
         
-        # Get retrieval hints from Query Planner (strategy-level recommendations)
-        retrieval_hints = state.get("retrieval_hints", [])
+        # RETRY MODE: Check if this is a retry round
+        retry_count = state.get("retry_count", 0)
+        
+        # Use refined_queries if in retry mode, otherwise use query_candidates
+        if retry_count > 0 and state.get("refined_queries"):
+            # Retry mode: use refined queries from Query Refiner
+            query_candidates = state.get("refined_queries", [])
+            print(f"\n🔄 RETRY MODE (Round {retry_count}) - Tool Calling with {len(query_candidates)} refined queries")
+            
+            # Extract retrieval hints from refined queries (Query Refiner's hints)
+            retrieval_hints = [
+                rq.get("retrieval_hint") 
+                for rq in query_candidates 
+                if isinstance(rq, dict) and rq.get("retrieval_hint")
+            ]
+            if retrieval_hints:
+                print(f"   Using {len(retrieval_hints)} retrieval hints from Query Refiner")
+        else:
+            # Initial mode: use query candidates from Query Planner
+            query_candidates = state.get("query_candidates", [])
+            # Get retrieval hints from Query Planner (strategy-level recommendations)
+            retrieval_hints = state.get("retrieval_hints", [])
         
         # Build tool calling prompt
         prompt = build_tool_calling_prompt(
@@ -179,7 +200,52 @@ class ToolCallingRetrievalRouter:
                 break
         
         # Aggregate all results
-        final_results, metadata = self._aggregate_tool_results(tool_results, state)
+        aggregated_results, metadata = self._aggregate_tool_results(tool_results, state)
+        
+        # Layer 2: Limit to reasonable number for Layer 3 (avoid sending too many to cross-encoder)
+        # Tool Calling mode can retrieve many chunks, so we limit here
+        max_for_layer3 = 20  # Send at most 20 chunks to Layer 3 cross-encoder
+        if len(aggregated_results) > max_for_layer3:
+            original_count = len(aggregated_results)
+            aggregated_results = aggregated_results[:max_for_layer3]
+            print(f"\n📊 Layer 2: Truncated {original_count} → {len(aggregated_results)} chunks for Layer 3")
+        
+        # RETRY MODE: Merge chunks if retry_count > 0
+        retry_count = state.get("retry_count", 0)
+        keep_chunks = state.get("keep_chunks", [])
+        missing_aspects = state.get("missing_aspects", [])
+        
+        if retry_count > 0 and keep_chunks:
+            print(f"\n🔀 Merging chunks (Tool Calling Mode - Round {retry_count}):")
+            print(f"   - Keep chunks (adaptive): {len(keep_chunks)}")
+            print(f"   - New chunks: {len(aggregated_results)}")
+            print(f"   - Missing aspects: {len(missing_aspects)}")
+            
+            # Call merge_chunks_in_retry tool
+            # 返回 15-20 merged chunks，然后传给 Evidence Judge 的 Layer 3 rerank
+            merged_results, merge_stats = self.tools.merge_chunks_in_retry(
+                keep_chunks=keep_chunks,
+                new_chunks=aggregated_results,
+                missing_aspects=missing_aspects,
+                quality_threshold=0.75,
+                top_k=20  # 返回最多 20 chunks，Evidence Judge 会 rerank 到 top 10
+            )
+            
+            final_results = merged_results
+            
+            print(f"\n✅ Merge complete (Adaptive Selection):")
+            print(f"   - Final chunks for Evidence Judge: {len(final_results)}")
+            print(f"   - Kept from old (adaptive): {merge_stats.get('kept_old_chunks', 0)}")
+            print(f"   - Added from new: {merge_stats.get('added_new_chunks', 0)}")
+            print(f"   - Removed duplicates: {merge_stats.get('duplicates_removed', 0)}")
+            print(f"   - Boosted for missing aspects: {merge_stats.get('boosted_chunks', 0)}")
+            print(f"   → Evidence Judge will rerank to top 10")
+            
+            # Update metadata with merge info
+            metadata.update(merge_stats)
+        else:
+            # Initial retrieval (no merge)
+            final_results = aggregated_results
         
         # Add execution log to metadata
         metadata["execution_log"] = execution_log

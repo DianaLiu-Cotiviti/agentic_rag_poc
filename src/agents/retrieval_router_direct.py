@@ -40,6 +40,8 @@ class DirectRetrievalRouter:
         
         直接调用 multi_query_hybrid_search，避免重复实现相同逻辑
         
+        Note: Direct mode 不支持 retry（总是直接生成答案）
+        
         Args:
             state: Contains query_candidates, question_keywords
             
@@ -66,7 +68,7 @@ class DirectRetrievalRouter:
         candidates = []
         for qc in query_candidates:
             if isinstance(qc, dict):
-                query_text = qc["query"]
+                query_text = qc.get("query", "")
                 # Enhance query with CPT descriptions if available
                 if cpt_descriptions:
                     desc_text = " ".join(cpt_descriptions.values())
@@ -74,22 +76,22 @@ class DirectRetrievalRouter:
                 
                 candidates.append(QueryCandidate(
                     query=query_text,
-                    query_type=qc.get("query_type", "original"),
+                    query_type=qc.get("query_type", qc.get("target_aspect", "refined")),
                     weight=qc.get("weight", 1.0),
-                    guidance=qc.get("guidance")  # Preserve guidance from Query Planner
+                    guidance=qc.get("guidance", qc.get("retrieval_hint"))
                 ))
             else:
                 # Enhance existing QueryCandidate
-                query_text = qc.query
+                query_text = qc.query if hasattr(qc, 'query') else str(qc)
                 if cpt_descriptions:
                     desc_text = " ".join(cpt_descriptions.values())
                     query_text = f"{query_text} [CPT Description: {desc_text}]"
                 
                 candidates.append(QueryCandidate(
                     query=query_text,
-                    query_type=qc.query_type,
-                    weight=qc.weight,
-                    guidance=qc.guidance if hasattr(qc, 'guidance') else None  # Preserve guidance
+                    query_type=getattr(qc, 'query_type', 'refined') if hasattr(qc, 'query_type') else 'refined',
+                    weight=getattr(qc, 'weight', 1.0) if hasattr(qc, 'weight') else 1.0,
+                    guidance=getattr(qc, 'guidance', None) if hasattr(qc, 'guidance') else None
                 ))
         
         # Call multi_query_hybrid_search directly
