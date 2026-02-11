@@ -49,6 +49,13 @@ def test_simple_workflow():
         print("📊 Final State Summary")
         print("="*80)
         
+        # Show retry information
+        retry_count = result.get('retry_count', 0)
+        if retry_count > 0:
+            print(f"\n🔄 Retry Information:")
+            print(f"   Total Retries: {retry_count}")
+            print(f"   Total Rounds: {retry_count + 1} (initial + {retry_count} retry)")
+        
         print(f"\n1️⃣  Orchestrator:")
         print(f"   Question Type: {result.get('question_type')}")
         print(f"   Complexity: {result.get('question_complexity')}")
@@ -115,7 +122,8 @@ def test_simple_workflow():
         # Add answer generator check if evidence was sufficient
         if assessment.get('is_sufficient'):
             checks.append(("Answer Generator provided answer", final_answer is not None))
-            checks.append(("Answer has citations", len(final_answer.get('citations', [])) > 0 if final_answer else False))
+            # Check citation_map (dict) instead of citations (list)
+            checks.append(("Answer has citations", len(final_answer.get('citation_map', {})) > 0 if final_answer else False))
         
         print("\n📋 Validation Checks:")
         all_passed = True
