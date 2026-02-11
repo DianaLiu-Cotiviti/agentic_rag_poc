@@ -17,6 +17,7 @@ from ..prompts.evidence_judge_prompts import (
     EVIDENCE_JUDGE_SYSTEM_MESSAGE,
     build_evidence_judgment_prompt
 )
+from ..utils.chunk_formatting import format_chunks_for_judge
 from ..utils.save_workflow_outputs import save_top10_chunks
 
 
@@ -206,15 +207,19 @@ class EvidenceJudgeAgent(BaseAgent):
         # Use reranked chunks for evaluation
         chunks_to_judge = reranked_chunks
         
+        # Format chunks for prompt
+        chunks_text = format_chunks_for_judge(chunks_to_judge, cpt_descriptions=cpt_descriptions)
+        
         # 构建prompt用于LLM评估
         # 注意：只用 original question 和 retrieved chunks 评估
         # 不需要 sub-queries（它们只是检索手段，不是评估目标）
-        prompt = self._build_judgment_prompt(
+        prompt = build_evidence_judgment_prompt(
             question=question,
             question_type=question_type,
-            chunks=chunks_to_judge,
-            retrieval_metadata=retrieval_metadata,
-            cpt_descriptions=cpt_descriptions  # Pass CPT descriptions to prompt builder
+            chunks_text=chunks_text,
+            retrieval_mode=retrieval_metadata.get("mode", "unknown"),
+            strategies_used=", ".join(retrieval_metadata.get("strategies_used", [])),
+            total_chunks=len(chunks_to_judge)
         )
         
         # 调用LLM进行结构化评估
@@ -244,232 +249,5 @@ class EvidenceJudgeAgent(BaseAgent):
             "retrieval_metadata": retrieval_metadata  # Update metadata with Layer 3 info
         }
     
-    def _build_judgment_prompt(
-        self,
-        question: str,
-        question_type: str,
-        chunks: List[RetrievalResult],
-        retrieval_metadata: dict,
-        cpt_descriptions: dict = None
-    ) -> str:
-        """
-        构建Evidence Judge的评估prompt
-        
-        评估逻辑：
-        - 评估目标：original question（不是sub-queries）
-        - 评估证据：retrieved chunks + CPT descriptions（已融合）
-        - 评估标准：question_type 对应的 required aspects
-        
-        Args:
-            question: Original user question（评估目标）
-            question_type: Question type
-            chunks: Retrieved chunks（已融合的15-20个chunks）
-            retrieval_metadata: Retrieval metadata
-            cpt_descriptions: CPT code -> description mapping (from retrieval)
-        """
-        # Format chunks
-        chunks_text = self._format_chunks_for_evaluation(chunks)
-        
-        # Format CPT descriptions (if available)
-        cpt_desc_text = ""
-        if cpt_descriptions:
-            cpt_desc_text = "\n\n### 📋 CPT Code Definitions (Retrieved)\n\n"
-            for code, description in cpt_descriptions.items():
-                cpt_desc_text += f"**CPT {code}**: {description}\n\n"
-        
-        # Extract metadata
-        retrieval_mode = retrieval_metadata.get("mode", "unknown")
-        strategies_used = retrieval_metadata.get("strategies_used", "N/A")
-        
-        # Use centralized prompt builder
-        return build_evidence_judgment_prompt(
-            question=question,
-            question_type=question_type,
-            chunks_text=chunks_text + cpt_desc_text,  # Append CPT descriptions to chunks
-            retrieval_mode=retrieval_mode,
-            strategies_used=str(strategies_used),
-            total_chunks=len(chunks)
-        )
     
-    def _format_chunks_for_evaluation(self, chunks: List[RetrievalResult]) -> str:
-        """
-        分层展示 top 10 chunks + LLM总结截断部分，避免信息丢失
-        
-        策略（分层展示 + LLM总结）：
-        - Chunk 1-5 (Detailed): 前800字符 + LLM 2-3句总结剩余部分（如果被截断）
-        - Chunk 6-10 (Medium): 前400字符 + LLM 1-2句总结剩余部分（如果被截断）
-        - 批量调用：1次LLM调用处理所有截断部分的总结
-        
-        Args:
-            chunks: List of RetrievalResult objects (top 10 after Layer 3 reranking)
-        """
-        if not chunks:
-            return "No chunks retrieved."
-        
-        # Step 1: 收集所有需要总结的截断部分
-        chunks_to_summarize = []
-        for i, chunk in enumerate(chunks[:10]):  # Only top 10 after Layer 3 reranking
-            chunk_id, score, text, metadata = self._extract_chunk_data(chunk)
-            
-            # 根据tier决定展示长度（只有 top 10）
-            if i < 5:
-                preview_len = 800
-                tier = "detailed"  # Chunk 1-5: 800 chars + 2-3 sentence summary
-            else:
-                preview_len = 400
-                tier = "medium"  # Chunk 6-10: 400 chars + 1-2 sentence summary
-            
-            # 如果文本被截断，记录需要总结的部分
-            if len(text) > preview_len:
-                chunks_to_summarize.append({
-                    "index": i,
-                    "tier": tier,
-                    "preview": text[:preview_len],
-                    "remaining": text[preview_len:],  # 被截断的部分
-                    "chunk_id": chunk_id,
-                    "score": score,
-                    "metadata": metadata
-                })
-            else:
-                chunks_to_summarize.append({
-                    "index": i,
-                    "tier": tier,
-                    "preview": text,
-                    "remaining": None,  # 无需总结
-                    "chunk_id": chunk_id,
-                    "score": score,
-                    "metadata": metadata
-                })
-        
-        # Step 2: 批量总结所有截断部分（1次LLM调用）
-        summaries = self._batch_summarize_truncated_parts(chunks_to_summarize)
-        
-        # Step 3: 格式化展示（将总结直接append到preview后面）
-        formatted_chunks = []
-        
-        for item in chunks_to_summarize:
-            i = item["index"]
-            tier = item["tier"]
-            chunk_id = item["chunk_id"]
-            score = item["score"]
-            metadata = item["metadata"]
-            preview = item["preview"]
-            summary = summaries.get(i, "")  # 获取该chunk的总结
-            
-            # 将总结直接拼接到preview后面，形成完整文本
-            full_text = f"{preview} {summary}" if summary else preview
-            
-            cpt_info = f" [CPT: {metadata.get('cpt_code')}]" if metadata.get("cpt_code") else ""
-            
-            # 根据tier格式化（总结已append到full_text中）
-            if tier == "detailed":
-                formatted_chunks.append(
-                    f"**[Detailed {i+1}]** (ID: {chunk_id}, Score: {score:.4f}){cpt_info}\n"
-                    f"{full_text}"
-                )
-            else:
-                formatted_chunks.append(
-                    f"**[Medium {i+1}]** (Score: {score:.4f}){cpt_info}\n"
-                    f"{full_text}"
-                )
-        
-        # Step 4: 整体统计信息
-        summary_info = f"\n\n**📊 Overall Summary**\n"
-        summary_info += f"Total chunks analyzed: {len(chunks)}\n"
-        summary_info += f"Score range: {chunks[0].score:.4f} (highest) to {chunks[len(chunks)-1].score:.4f} (lowest)"
-        
-        return "\n\n".join(formatted_chunks) + summary_info
-    
-    def _batch_summarize_truncated_parts(self, chunks_data: List[dict]) -> dict:
-        """
-        批量总结所有被截断的chunk部分（1次LLM调用）
-        
-        使用配置的主模型进行总结
-        
-        Args:
-            chunks_data: List of chunk data with 'remaining' text to summarize
-            
-        Returns:
-            dict: {chunk_index: summary_text}
-        """
-        # 收集需要总结的chunks
-        to_summarize = [
-            (item["index"], item["tier"], item["remaining"])
-            for item in chunks_data
-            if item["remaining"]  # 只总结被截断的部分
-        ]
-        
-        if not to_summarize:
-            return {}  # 无需总结
-        
-        # 构建批量总结prompt
-        prompt = "Summarize the continuation of each chunk below. Be concise but capture key medical coding details.\n\n"
-        
-        for idx, tier, remaining_text in to_summarize:
-            # 根据tier决定总结长度和要求
-            if tier == "detailed":
-                instruction = "Provide detailed summary (2-3 sentences covering key medical coding details)"
-            else:
-                instruction = "Provide medium summary (1-2 sentences with main points)"
-            
-            prompt += f"Chunk {idx} ({instruction}):\n{remaining_text[:1500]}\n\n"
-        
-        prompt += "\nIMPORTANT: Return summaries in format: Chunk X: [summary]\nEach summary should be a natural continuation of the previous text, without redundant introductions."
-        
-        try:
-            # 使用同一个client和deployment（不需要单独的小模型）
-            response = self.client.chat.completions.create(
-                model=self.config.azure_deployment_name,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }],
-                temperature=0.3,
-                max_tokens=1000
-            )
-            
-            # 解析summaries
-            summaries_text = response.choices[0].message.content
-            summaries = self._parse_batch_summaries(summaries_text)
-            
-            return summaries
-            
-        except Exception as e:
-            # 如果LLM调用失败，返回空（graceful degradation）
-            print(f"Warning: Batch summarization failed: {e}")
-            return {}
-    
-    def _parse_batch_summaries(self, summaries_text: str) -> dict:
-        """
-        解析批量总结的输出
-        
-        Expected format:
-        Chunk 0: This section explains...
-        Chunk 5: The remaining text discusses...
-        """
-        import re
-        summaries = {}
-        
-        # 正则提取 "Chunk X: summary"
-        pattern = r'Chunk\s+(\d+):\s*(.+?)(?=Chunk\s+\d+:|$)'
-        matches = re.findall(pattern, summaries_text, re.DOTALL)
-        
-        for chunk_idx, summary in matches:
-            summaries[int(chunk_idx)] = summary.strip()
-        
-        return summaries
-    
-    def _extract_chunk_data(self, chunk) -> tuple:
-        """提取chunk数据（兼容dict和对象）"""
-        if isinstance(chunk, dict):
-            return (
-                chunk.get("chunk_id", "unknown"),
-                chunk.get("score", 0.0),
-                chunk.get("text", ""),
-                chunk.get("metadata", {})
-            )
-        else:
-            return (chunk.chunk_id, chunk.score, chunk.text, chunk.metadata)
-
-   
     
