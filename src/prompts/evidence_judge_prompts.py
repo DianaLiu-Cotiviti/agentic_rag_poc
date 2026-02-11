@@ -4,6 +4,7 @@ Evidence Judge Prompts
 Comprehensive prompts for Evidence Quality Assessment
 """
 
+
 # System message for Evidence Judge
 EVIDENCE_JUDGE_SYSTEM_MESSAGE = """You are an Evidence Quality Judge for a medical coding RAG system.
 
