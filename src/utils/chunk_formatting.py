@@ -4,7 +4,7 @@ Chunk Formatting Utilities
 Reusable functions for formatting retrieval chunks for display to LLM
 """
 
-from typing import List
+from typing import List, Dict, Any
 from ..state import RetrievalResult
 
 
@@ -72,3 +72,46 @@ def format_cpt_descriptions(cpt_descriptions: dict) -> str:
         desc_text += f"**CPT {code}**: {description}\n\n"
     
     return desc_text
+
+
+def format_chunks_for_judge(chunks: List[RetrievalResult], cpt_descriptions: Dict[int, str] = None) -> str:
+    """
+    Format chunks for Evidence Judge evaluation
+    
+    Args:
+        chunks: List of RetrievalResult objects
+        cpt_descriptions: Optional CPT code descriptions
+        
+    Returns:
+        Formatted string with all chunks
+    """
+    if not chunks:
+        return "No chunks retrieved."
+    
+    formatted = []
+    for i, chunk in enumerate(chunks, 1):
+        chunk_text = f"### Chunk {i}"
+        if hasattr(chunk, 'score'):
+            chunk_text += f" (Score: {chunk.score:.4f})"
+        chunk_text += f"\n\n{chunk.text}\n"
+        
+        # Add metadata if available
+        if hasattr(chunk, 'metadata') and chunk.metadata:
+            metadata_items = []
+            for key, value in chunk.metadata.items():
+                if key not in ['text', 'embedding']:  # Skip large fields
+                    metadata_items.append(f"{key}: {value}")
+            if metadata_items:
+                chunk_text += f"\n**Metadata**: {', '.join(metadata_items)}\n"
+        
+        formatted.append(chunk_text)
+    
+    # Add CPT descriptions at the top if available
+    header = ""
+    if cpt_descriptions:
+        header = "**CPT Code Descriptions**:\n"
+        for code, desc in cpt_descriptions.items():
+            header += f"- CPT {code}: {desc}\n"
+        header += "\n---\n\n"
+    
+    return header + "\n".join(formatted)

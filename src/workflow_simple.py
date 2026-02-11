@@ -85,6 +85,7 @@ class SimpleAgenticRAGWorkflow:
         workflow.add_node("retrieval", self._retrieval_node)
         workflow.add_node("evidence_judge", self._evidence_judge_node)
         workflow.add_node("answer_generator", self._answer_generator_node)  # NEW
+        workflow.add_node("query_refiner", self._query_refiner_node)  # NEW: Retry logic
         
         # 设置入口
         workflow.set_entry_point("orchestrator")
@@ -94,15 +95,19 @@ class SimpleAgenticRAGWorkflow:
         workflow.add_edge("query_planner", "retrieval")
         workflow.add_edge("retrieval", "evidence_judge")
         
-        # Conditional edge: Evidence Judge → Answer Generator (if sufficient) or END (if insufficient)
+        # Conditional edge: Evidence Judge → Answer Generator / Query Refiner / END
         workflow.add_conditional_edges(
             "evidence_judge",
-            self._should_generate_answer,
+            self._should_retry_or_answer,
             {
-                "generate": "answer_generator",  # Evidence is sufficient → generate answer
-                "end": END  # Evidence is insufficient → end (retry logic will be added later)
+                "answer": "answer_generator",  # Evidence is sufficient → generate answer
+                "retry": "query_refiner",  # Evidence is insufficient + retry < max → refine queries
+                "end": END  # Evidence is insufficient + retry >= max → end
             }
         )
+        
+        # Query Refiner → Retrieval (retry loop, skip Query Planner)
+        workflow.add_edge("query_refiner", "retrieval")
         
         # Answer Generator → END
         workflow.add_edge("answer_generator", END)
@@ -264,8 +269,110 @@ class SimpleAgenticRAGWorkflow:
         state.update(result)
         return state
     
-    def _should_generate_answer(self, state: AgenticRAGState) -> Literal["generate", "end"]:
+    def _should_retry_or_answer(
+        self, 
+        state: AgenticRAGState
+    ) -> Literal["answer", "retry", "end"]:
         """
+        Conditional edge: 决定是否生成答案、重试、或结束
+        
+        Decision Logic by Mode:
+        
+        **Direct Mode** (0 LLM calls):
+        - 直接生成答案，不判断 sufficiency，不retry
+        - 理由: Direct mode 已经使用固定的 hybrid+RRF 策略，结果稳定可靠
+        
+        **Planning Mode** (1 LLM call):
+        - 判断 evidence sufficiency
+        - If sufficient → "answer" (进入 Answer Generator)
+        - If insufficient + retry < max → "retry" (进入 Query Refiner)
+        - If insufficient + retry >= max → "end"
+        
+        **Tool Calling Mode** (5-15 LLM calls):
+        - 判断 evidence sufficiency
+        - If sufficient → "answer" (进入 Answer Generator)
+        - If insufficient + retry < max → "retry" (进入 Query Refiner)
+        - If insufficient + retry >= max → "end"
+        
+        Args:
+            state: Current state with evidence_assessment, retrieval_metadata, retry_count
+            
+        Returns:
+            "answer" | "retry" | "end"
+        """
+        # Get retrieval mode from metadata
+        retrieval_metadata = state.get("retrieval_metadata", {})
+        mode = retrieval_metadata.get("mode", self.config.retrieval_mode)
+        
+        # Direct mode: 直接生成答案，不判断 sufficiency，不retry
+        if mode == "direct":
+            print("\n✅ Direct Mode: Skipping sufficiency check → Proceeding to Answer Generator")
+            print("   (Direct mode uses stable hybrid+RRF strategy, always generates answer)")
+            return "answer"
+        
+        # Planning & Tool Calling modes: 判断 sufficiency + retry logic
+        assessment = state.get("evidence_assessment")
+        
+        # Safety check
+        if not assessment:
+            print(f"\n⚠️  No evidence assessment found for {mode} mode, ending workflow")
+            return "end"
+        
+        is_sufficient = assessment.get("is_sufficient", False)
+        retry_count = state.get("retry_count", 0)
+        max_retry = state.get("max_retry", 2)  # Default max_retry = 2
+        
+        if is_sufficient:
+            print(f"\n✅ {mode.title()} Mode: Evidence is SUFFICIENT → Proceeding to Answer Generator")
+            if retry_count > 0:
+                print(f"   (Achieved sufficiency after {retry_count} retry rounds)")
+            return "answer"
+        
+        # Evidence is insufficient
+        if retry_count >= max_retry:
+            print(f"\n❌ {mode.title()} Mode: Evidence is INSUFFICIENT + Max retries reached ({retry_count}/{max_retry})")
+            print("   → Ending workflow")
+            return "end"
+        
+        # Can retry
+        print(f"\n🔄 {mode.title()} Mode: Evidence is INSUFFICIENT → Retry {retry_count + 1}/{max_retry}")
+        print(f"   Missing aspects: {len(state.get('missing_aspects', []))}")
+        return "retry"
+    
+    def _query_refiner_node(self, state: AgenticRAGState) -> AgenticRAGState:
+        """
+        Query Refiner节点
+        
+        职责:
+        1. Analyze missing_aspects from Evidence Judge
+        2. Generate refined queries targeting specific gaps
+        3. Select top 3 chunks to preserve (keep_chunks)
+        4. Increment retry_count
+        """
+        print("\n" + "="*80)
+        print("🔄 Step X: Query Refiner - Generating refined queries for retry...")
+        print("="*80)
+        
+        result = self.agents.query_refiner_node(state)
+        
+        refined_queries = result.get('refined_queries', [])
+        print(f"\n✅ Generated {len(refined_queries)} refined queries")
+        for i, rq in enumerate(refined_queries, 1):
+            print(f"   {i}. {rq.get('query', 'N/A')[:100]}")
+        
+        keep_chunks = result.get('keep_chunks', [])
+        print(f"\n📦 Preserving {len(keep_chunks)} top chunks for merge")
+        
+        retry_count = result.get('retry_count', 0)
+        print(f"🔄 Retry count: {retry_count}")
+        
+        state.update(result)
+        return state
+    
+    def _should_generate_answer_OLD_REMOVED(self, state: AgenticRAGState) -> Literal["generate", "end"]:
+        """
+        OLD VERSION - REPLACED BY _should_retry_or_answer
+        
         Conditional edge: 判断是否生成答案（根据 mode 采用不同策略）
         
         Decision Logic by Mode:
