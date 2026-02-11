@@ -621,4 +621,141 @@ class RetrievalTools:
             
             print(f"   ↩️  Falling back to original top-{top_k}")
             return chunks[:top_k]
-
+    
+    def merge_chunks_in_retry(
+        self,
+        keep_chunks: List[RetrievalResult],
+        new_chunks: List[RetrievalResult],
+        missing_aspects: List[str],
+        quality_threshold: float = 0.75,
+        top_k: int = 20
+    ) -> tuple[List[RetrievalResult], dict]:
+        """
+        智能合并旧/新 chunks（仅在 retry 时使用）- OpenAI 标准方法
+        
+        策略：
+        1. 保留旧 chunks (1-5个，由 adaptive selection 决定)
+        2. 新 chunks 去重 + 质量门槛（score >= 0.75）
+        3. 优先选择解决 missing_aspects 的 chunks（加权 10%）
+        4. RRF 融合
+        5. 多样性过滤（同一文档最多 3 chunks）
+        
+        Args:
+            keep_chunks: Adaptively selected chunks from previous round (1-5 chunks)
+            new_chunks: New chunks from current retrieval (15-20 chunks)
+            missing_aspects: Missing aspects to prioritize
+            quality_threshold: Minimum score for new chunks (default: 0.75)
+            top_k: Maximum chunks to return (default: 20)
+            
+        Returns:
+            Tuple of (merged_chunks, merge_stats)
+        """
+        print(f"\n🔀 Merging Chunks (Retry Mode - OpenAI Strategy):")
+        print(f"   Old chunks (adaptive selection): {len(keep_chunks)}")
+        print(f"   New chunks (candidates): {len(new_chunks)}")
+        
+        # 1️⃣ 显示保留的旧 chunks (动态数量: 1-5)
+        print(f"\n   📌 Keeping {len(keep_chunks)} high-quality chunks from previous round:")
+        for i, chunk in enumerate(keep_chunks, 1):
+            print(f"      {i}. {chunk.chunk_id} (score: {chunk.score:.4f})")
+        
+        # 2️⃣ 过滤新 chunks：去重 + 质量门槛
+        qualified_new = []
+        old_chunk_ids = {c.chunk_id for c in keep_chunks}
+        
+        for new_chunk in new_chunks:
+            # 质量门槛
+            if new_chunk.score < quality_threshold:
+                continue
+            
+            # 去重检查（简单版：chunk_id）
+            if new_chunk.chunk_id in old_chunk_ids:
+                continue
+            
+            # 优先级加权：解决 missing_aspects 的 chunk 加分
+            if self._addresses_missing_aspect(new_chunk, missing_aspects):
+                new_chunk.score *= 1.1  # 加权 10%
+                new_chunk._was_boosted = True  # Mark for stats
+                print(f"   ✨ Boosted {new_chunk.chunk_id} (addresses missing aspect)")
+            
+            qualified_new.append(new_chunk)
+        
+        print(f"\n   ✅ Qualified new chunks: {len(qualified_new)}")
+        print(f"      (Filtered: score >= {quality_threshold}, no duplicates)")
+        
+        # 3️⃣ RRF 融合（基于 chunk.score）
+        all_chunks = keep_chunks + qualified_new
+        merged = self._reciprocal_rank_fusion_merge(all_chunks)
+        
+        # 4️⃣ 多样性过滤（避免都来自同一文档）
+        final = self._enforce_diversity(merged, max_per_doc=3, top_k=top_k)
+        
+        # 统计信息
+        kept_old_count = min(len(keep_chunks), len(final))
+        new_in_final = len(final) - kept_old_count
+        duplicates_removed = len(new_chunks) - len(qualified_new)
+        boosted_count = sum(1 for c in qualified_new if hasattr(c, '_was_boosted'))
+        
+        print(f"\n   🎯 Final merged chunks: {len(final)}")
+        if final:
+            print(f"      Score range: {final[0].score:.4f} - {final[-1].score:.4f}")
+        print(f"      Composition: {kept_old_count} old + {new_in_final} new")
+        
+        merge_stats = {
+            'kept_old_chunks': kept_old_count,
+            'qualified_new_chunks': len(qualified_new),
+            'added_new_chunks': new_in_final,
+            'duplicates_removed': duplicates_removed,
+            'boosted_chunks': boosted_count,
+            'total_merged': len(final)
+        }
+        
+        return final, merge_stats
+    
+    def _addresses_missing_aspect(self, chunk, missing_aspects):
+        """检查 chunk 是否解决了某个 missing aspect"""
+        if not missing_aspects:
+            return False
+        
+        chunk_text_lower = chunk.text.lower()
+        for aspect in missing_aspects:
+            # 简单关键词匹配
+            aspect_keywords = aspect.lower().split()
+            if any(keyword in chunk_text_lower for keyword in aspect_keywords):
+                return True
+        return False
+    
+    def _reciprocal_rank_fusion_merge(self, chunks, k=60):
+        """RRF 融合（基于 chunk.score 排序）
+        
+        Returns chunks sorted by RRF score, with original score preserved
+        """
+        # 按 score 排序
+        sorted_chunks = sorted(chunks, key=lambda c: c.score, reverse=True)
+        
+        # 计算 RRF score 并存储在字典中（不修改 Pydantic 对象）
+        rrf_scores = {}
+        for rank, chunk in enumerate(sorted_chunks):
+            rrf_score = 1.0 / (rank + k)
+            rrf_scores[chunk.chunk_id] = rrf_score
+        
+        # 按 RRF score 重新排序（保留原 score 用于后续 cross-encoder）
+        return sorted(sorted_chunks, key=lambda c: rrf_scores[c.chunk_id], reverse=True)
+    
+    def _enforce_diversity(self, chunks, max_per_doc=3, top_k=20):
+        """确保多样性：同一文档最多 max_per_doc 个 chunks"""
+        doc_count = {}
+        diverse_chunks = []
+        
+        for chunk in chunks:
+            # Stop if we've reached top_k
+            if len(diverse_chunks) >= top_k:
+                break
+                
+            doc_id = chunk.metadata.get('document_id', chunk.metadata.get('source', 'unknown'))
+            
+            if doc_count.get(doc_id, 0) < max_per_doc:
+                diverse_chunks.append(chunk)
+                doc_count[doc_id] = doc_count.get(doc_id, 0) + 1
+        
+        return diverse_chunks
