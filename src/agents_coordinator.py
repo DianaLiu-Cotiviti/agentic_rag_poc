@@ -69,7 +69,7 @@ class AgenticRAGAgents:
         self.query_planner = QueryPlannerAgent(config)
         self.evidence_judge = EvidenceJudgeAgent(config)
         self.answer_generator = AnswerGeneratorAgent(config)  # NEW: Answer Generator
-        # self.query_refiner = QueryRefinerAgent(config)
+        self.query_refiner = QueryRefinerAgent(config)  # NEW: Query Refiner for retry (统一使用 Azure OpenAI)
         # self.structured_extraction = StructuredExtractionAgent(config)
         
         # retrieval_router需要在workflow中传入tools和mode
@@ -162,13 +162,14 @@ class AgenticRAGAgents:
         """
         return self.answer_generator.process(state)
     
-    # def query_refiner_node(self, state: AgenticRAGState) -> dict:
-    #     """
-    #     Query Refiner节点
+    def query_refiner_node(self, state: AgenticRAGState) -> dict:
+        """
+        Query Refiner节点
         
-    #     优化查询以填补证据缺失（retry时使用）
-    #     """
-    #     return self.query_refiner.process(state)
+        优化查询以填补证据缺失（retry时使用）
+        Generate refined queries and select keep_chunks
+        """
+        return self.query_refiner.process(state)
     
     # def structured_extraction_node(self, state: AgenticRAGState) -> dict:
     #     """

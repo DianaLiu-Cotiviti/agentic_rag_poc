@@ -54,7 +54,7 @@ class AgenticRAGConfig(BaseModel):
     azure_deployment_name_embedding: Optional[str] = None
     
     # Retrieval settings
-    retrieval_mode: str = "direct"  # "direct" | "planning" | "tool_calling"
+    retrieval_mode: str = "tool_calling"  # "direct" | "planning" | "tool_calling"
     top_k: int = 15
     max_retry: int = 2
     rrf_k: int = 60
