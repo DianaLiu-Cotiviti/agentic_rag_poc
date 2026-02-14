@@ -1,3 +1,16 @@
+# Helper: get chunk text by id from a list of chunk dicts/objects
+def get_chunk_text_by_id(chunks, chunk_id):
+    for chunk in chunks:
+        # Try both 'chunk_id' and 'id' for maximum compatibility
+        if isinstance(chunk, dict):
+            cid = chunk.get('chunk_id') or chunk.get('id')
+            ctext = chunk.get('text')
+        else:
+            cid = getattr(chunk, 'chunk_id', None) or getattr(chunk, 'id', None)
+            ctext = getattr(chunk, 'text', None)
+        if cid == chunk_id:
+            return ctext
+    return None
 """
 Chunk Formatting Utilities
 
@@ -10,14 +23,14 @@ from ..state import RetrievalResult
 
 def format_chunks_with_ids(chunks: List[RetrievalResult]) -> str:
     """
-    格式化 chunks，添加编号和 ID 标识（用于 Answer Generator）
+    Format chunks with numbering and ID markers (for Answer Generator)
     
-    每个 chunk 显示为:
+    Each chunk is displayed as:
     ### Chunk [1] - chunk_000210 (Score: 0.xxxx) [CPT: xxxxx]
     {chunk text}
     
-    编号 [1] [2] [3] 用于在答案中引用
-    chunk_id 用于追溯原始数据
+    Numbers [1] [2] [3] are used for citation in answers
+    chunk_id is used to trace back to original data
     
     Args:
         chunks: List of RetrievalResult objects
@@ -30,7 +43,7 @@ def format_chunks_with_ids(chunks: List[RetrievalResult]) -> str:
     
     formatted = []
     for i, chunk in enumerate(chunks, 1):
-        # Extract chunk data (支持 dict 和 object 两种格式)
+        # Extract chunk data (supports both dict and object formats)
         if isinstance(chunk, dict):
             chunk_id = chunk.get("chunk_id", f"chunk_{i}")
             text = chunk.get("text", "")
@@ -56,7 +69,7 @@ def format_chunks_with_ids(chunks: List[RetrievalResult]) -> str:
 
 def format_cpt_descriptions(cpt_descriptions: dict) -> str:
     """
-    格式化 CPT code descriptions
+    Format CPT code descriptions
     
     Args:
         cpt_descriptions: Dict of CPT code -> description

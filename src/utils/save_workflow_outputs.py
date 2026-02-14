@@ -1,10 +1,10 @@
 """
-保存workflow各阶段输出的辅助函数
+Helper functions for saving workflow outputs at each stage
 
-包含的输出类型：
-- Retrieved chunks (检索到的文档块)
-- Query candidates (生成的查询候选)
-- Final answers (Answer Generator最终回答)
+Output types included:
+- Retrieved chunks (retrieved document chunks)
+- Query candidates (generated query candidates)
+- Final answers (Answer Generator final responses)
 """
 import json
 import os
@@ -20,7 +20,7 @@ def save_retrieved_chunks(
     metadata: Dict[str, Any] = None
 ) -> str:
     """
-    保存检索到的chunks到output目录
+    Save retrieved chunks to output directory
     
     Args:
         chunks: Retrieved chunks (list of RetrievalResult objects)
@@ -31,16 +31,16 @@ def save_retrieved_chunks(
     Returns:
         str: Saved file path
     """
-    # 创建输出目录
+    # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # 生成文件名（包含mode和时间戳）
+    # Generate filename (including mode and timestamp)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     mode = metadata.get('mode', 'unknown') if metadata else 'unknown'
     filename = f"retrieval_{mode}_{timestamp}.json"
     filepath = os.path.join(output_dir, filename)
     
-    # 准备保存的数据
+    # Prepare data to save
     data = {
         "timestamp": datetime.now().isoformat(),
         "question": question,
@@ -57,7 +57,7 @@ def save_retrieved_chunks(
         ]
     }
     
-    # 保存到文件
+    # Save to file
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     
@@ -71,7 +71,7 @@ def save_query_candidates(
     metadata: Dict[str, Any] = None
 ) -> str:
     """
-    保存query candidates (sub queries)到output/queries目录
+    Save query candidates (sub queries) to output/queries directory
     
     Args:
         query_candidates: List of QueryCandidate objects
@@ -82,15 +82,15 @@ def save_query_candidates(
     Returns:
         str: Saved file path
     """
-    # 创建输出目录
+    # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # 生成文件名（基于时间戳）
+    # Generate filename (based on timestamp)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"queries_{timestamp}.json"
     filepath = os.path.join(output_dir, filename)
     
-    # 准备保存的数据
+    # Prepare data to save
     data = {
         "timestamp": datetime.now().isoformat(),
         "original_question": question,
@@ -106,7 +106,7 @@ def save_query_candidates(
         ]
     }
     
-    # 保存到文件
+    # Save to file
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     
@@ -120,7 +120,7 @@ def save_final_answer(
     metadata: Dict[str, Any] = None
 ) -> str:
     """
-    保存Answer Generator生成的最终回答到output/responses目录
+    Save Answer Generator's final answer to output/responses directory
     
     Args:
         final_answer: CitedAnswer object (dict with answer, key_points, citations, etc.)
@@ -131,16 +131,16 @@ def save_final_answer(
     Returns:
         str: Saved file path
     """
-    # 创建输出目录
+    # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # 生成文件名（基于mode和时间戳）
+    # Generate filename (based on mode and timestamp)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     mode = metadata.get('mode', 'unknown') if metadata else 'unknown'
     filename = f"answer_{mode}_{timestamp}.json"
     filepath = os.path.join(output_dir, filename)
     
-    # 准备保存的数据
+    # Prepare data to save
     data = {
         "timestamp": datetime.now().isoformat(),
         "question": question,
@@ -148,7 +148,7 @@ def save_final_answer(
         "final_answer": final_answer
     }
     
-    # 保存到文件
+    # Save to file
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     
@@ -162,8 +162,8 @@ def save_top10_chunks(
     metadata: Dict[str, Any] = None
 ) -> str:
     """
-    保存Evidence Judge Layer 3 reranking后的top 10 chunks到output/retrievals目录
-    这些是LLM生成答案的直接依据
+    Save top 10 chunks after Evidence Judge Layer 3 reranking to output/retrievals directory
+    These serve as direct evidence for LLM answer generation
     
     Args:
         top10_chunks: Top 10 chunks after cross-encoder reranking
@@ -174,16 +174,16 @@ def save_top10_chunks(
     Returns:
         str: Saved file path
     """
-    # 创建输出目录
+    # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # 生成文件名（包含mode和时间戳）
+    # Generate filename (including mode and timestamp)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     mode = metadata.get('mode', 'unknown') if metadata else 'unknown'
     filename = f"top10_chunks_{mode}_{timestamp}.json"
     filepath = os.path.join(output_dir, filename)
     
-    # 准备保存的数据
+    # Prepare data to save
     data = {
         "timestamp": datetime.now().isoformat(),
         "question": question,
@@ -201,7 +201,7 @@ def save_top10_chunks(
         ]
     }
     
-    # 保存到文件
+    # Save to file
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     
@@ -216,12 +216,12 @@ def save_reranked_chunks(
     output_dir: str = "output/retrievals/layer3_reranking"
 ) -> str:
     """
-    保存Layer 3 cross-encoder reranking的结果
+    Save Layer 3 cross-encoder reranking results
     
-    用于分析和调试reranking效果：
-    - 比较reranking前后的排序变化
-    - 查看CE分数 vs 原始分数
-    - 分析哪些chunks被提升/降低/过滤
+    Used for analyzing and debugging reranking effectiveness:
+    - Compare ranking changes before and after reranking
+    - View CE scores vs original scores
+    - Analyze which chunks were promoted/demoted/filtered
     
     Args:
         question: Original user question
@@ -233,17 +233,17 @@ def save_reranked_chunks(
     Returns:
         str: Saved file path
     """
-    # 创建输出目录
+    # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # 生成文件名（基于时间戳）
+    # Generate filename (based on timestamp)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"layer3_rerank_{timestamp}.json"
     filepath = os.path.join(output_dir, filename)
     
-    # 计算排序变化
+    # Calculate rank changes
     def calculate_rank_change(chunk_id: str, old_rank: int) -> str:
-        """计算排序变化"""
+        """Calculate rank change"""
         for i, chunk in enumerate(reranked_chunks):
             cid = getattr(chunk, 'chunk_id', chunk.get('chunk_id', '') if isinstance(chunk, dict) else '')
             if cid == chunk_id:
@@ -252,7 +252,7 @@ def save_reranked_chunks(
                 return f"+{change}" if change > 0 else f"{change}" if change < 0 else "0"
         return "dropped"
     
-    # 准备保存的数据
+    # Prepare data to save
     data = {
         "timestamp": datetime.now().isoformat(),
         "question": question,
@@ -291,7 +291,7 @@ def save_reranked_chunks(
         }
     }
     
-    # 保存到文件
+    # Save to file
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     
