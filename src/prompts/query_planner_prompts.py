@@ -128,7 +128,7 @@ Identify **query constraints** that affect retrieval or answer scope:
 **Scope Constraints:**
 - "for CPT 14000-14350 range", "within trunk procedures", "NCCI policies only"
 
-### 💡 STEP 5: Retrieval Hints (策略层 - 建议使用什么工具/方法)
+### 💡 STEP 5: Retrieval Hints (Strategy layer - recommend tools/methods to use)
 
 Provide **strategic recommendations** for the Retrieval Router on which retrieval strategies to use.
 
@@ -141,16 +141,16 @@ Provide **strategic recommendations** for the Retrieval Router on which retrieva
 - **BM25 Search Priority**: "Prioritize keyword matching for exact code lookups" (for code-specific queries)
 - **Multiple Strategy Combination**: "Execute both semantic and range_routing, then fuse results" (for multi-aspect queries)
 
-**Examples of Good Retrieval Hints** (策略层 ✅):
+**Examples of Good Retrieval Hints** (Strategy layer ✅):
 - "Use range_routing to pre-filter chunks for CPT 14301 and 27702"
 - "Apply hybrid search for comprehensive NCCI policy retrieval"
 - "Prioritize semantic search for modifier definition understanding"
 - "Combine semantic + BM25 strategies for billing compatibility queries"
 
-**Examples of Bad Retrieval Hints** (工具层 ❌ - 不要写这些！):
-- ❌ "Look for modifier compatibility tables" (这是search guidance的内容)
-- ❌ "Search for anatomical region-specific rules" (这是search guidance的内容)
-- ❌ "Focus on finding PTP edit table entries" (这是search guidance的内容)
+**Examples of Bad Retrieval Hints** (Tool layer ❌ - Don't write these!):
+- ❌ "Look for modifier compatibility tables" (this is search guidance content)
+- ❌ "Search for anatomical region-specific rules" (this is search guidance content)
+- ❌ "Focus on finding PTP edit table entries" (this is search guidance content)
 
 **Note**: Specific search targets (what to find) are handled by Search Guidance, which is automatically generated per query candidate based on question type.
 

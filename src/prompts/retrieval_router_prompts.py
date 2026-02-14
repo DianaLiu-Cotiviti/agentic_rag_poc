@@ -167,7 +167,7 @@ For EACH query candidate, select THE BEST retrieval strategy from 4 options.
 - ❌ Pure conceptual questions (use semantic)
 
 **Fusion method**: Score accumulation at planning layer
-**Example score**: If chunk found by both BM25(0.8) and Semantic(0.6) → Final score = 1.4 (累加)
+**Example score**: If chunk found by both BM25(0.8) and Semantic(0.6) → Final score = 1.4 (accumulation)
 
 **Key difference from `hybrid`**:
 - `hybrid`: RRF fusion at tools layer → Lower scores (~0.7 for same chunk)
@@ -480,11 +480,11 @@ def build_tool_calling_prompt(
     """
     Build prompt for LLM-driven tool calling mode
     
-    Tool Calling模式：LLM根据每一步的结果动态决定下一个tool call
-    - 可以看到中间结果
-    - 可以根据结果调整策略
-    - 可以迭代优化
-    - 成本高（5-15次LLM调用），但质量最高
+    Tool Calling mode: LLM dynamically decides the next tool call based on each step's result
+    - Can see intermediate results
+    - Can adjust strategy based on results
+    - Can iterate and optimize
+    - High cost (5-15 LLM calls), but highest quality
     
     Args:
         question: Original user query

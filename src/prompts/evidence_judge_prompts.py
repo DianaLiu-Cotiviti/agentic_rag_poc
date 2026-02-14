@@ -109,15 +109,15 @@ def build_evidence_judgment_prompt(
     """
     Build comprehensive evaluation prompt for Evidence Judge
     
-    评估逻辑：
-    - 评估目标：original question（用户的原始问题）
-    - 评估证据：retrieved chunks（融合后的15-20个高分chunks）
-    - 评估方法：根据question_type判断required aspects是否被覆盖
+    Evaluation Logic:
+    - Evaluation Target: original question (user's original question)
+    - Evaluation Evidence: retrieved chunks (15-20 high-scoring chunks after fusion)
+    - Evaluation Method: Determine if required aspects are covered based on question_type
     
-    注意：不需要sub-queries！
-    - Sub-queries只是检索手段（用于Query Planner → Retrieval Router）
-    - Evidence Judge评估的是：这些chunks能否回答original question
-    - 不是：这些chunks能否回答每个sub-query
+    Note: Sub-queries are NOT needed!
+    - Sub-queries are only a retrieval method (used for Query Planner → Retrieval Router)
+    - Evidence Judge evaluates: Can these chunks answer the original question?
+    - NOT: Can these chunks answer each sub-query?
     
     Guidelines:
     - Coverage: Does evidence cover all required aspects for this question type?
@@ -126,9 +126,9 @@ def build_evidence_judgment_prompt(
     - Missing Aspects: What specific aspects are missing (for query refinement)?
     
     Args:
-        question: Original user question（评估目标）
+        question: Original user question (evaluation target)
         question_type: Question type (cpt_code_lookup, billing_compatibility, etc.)
-        chunks_text: Formatted chunks for evaluation（融合后的chunks）
+        chunks_text: Formatted chunks for evaluation (chunks after fusion)
         retrieval_mode: Which retrieval mode was used
         strategies_used: Which strategies were used
         total_chunks: Total number of chunks retrieved
