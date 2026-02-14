@@ -2,11 +2,11 @@
 Workflow Memory Management
 ==========================
 
-保存和管理workflow执行历史，用于：
-- Debug和追溯
-- 性能分析
+Save and manage workflow execution history for:
+- Debugging and tracing
+- Performance analysis
 - Long-term learning
-- 用户会话历史
+- User session history
 """
 
 import json
@@ -17,14 +17,14 @@ from typing import Dict, Any, List, Optional
 
 class WorkflowMemory:
     """
-    Workflow执行记录管理器
+    Workflow execution record manager
     
-    功能：
-    - 保存每次workflow执行的完整state
-    - 维护历史记录（带时间戳）
-    - 提供latest.json快速访问最新结果
+    Features:
+    - Save complete state for each workflow execution
+    - Maintain historical records (with timestamps)
+    - Provide latest.json for quick access to the latest results
     
-    用法：
+    Usage:
         memory = WorkflowMemory(memory_dir="memory")
         memory.save_execution(
             question="What is CPT 14301?",
@@ -35,10 +35,10 @@ class WorkflowMemory:
     
     def __init__(self, memory_dir: str = "memory"):
         """
-        初始化Memory管理器
+        Initialize Memory manager
         
         Args:
-            memory_dir: 存储目录路径（相对于项目根目录）
+            memory_dir: Storage directory path (relative to project root)
         """
         self.memory_dir = Path(memory_dir)
         self.memory_dir.mkdir(exist_ok=True)
@@ -53,26 +53,26 @@ class WorkflowMemory:
         error: Optional[str] = None
     ) -> Path:
         """
-        保存单次workflow执行结果
+        Save single workflow execution result
         
         Args:
-            question: 用户问题
-            final_state: Workflow的最终state
-            workflow_type: Workflow类型 ("simple", "with_retry", "full"等)
+            question: User question
+            final_state: Final state of the workflow
+            workflow_type: Workflow type ("simple", "with_retry", "full", etc.)
             mode: Retrieval mode ("direct", "planning", "tool_calling")
-            success: 是否成功执行
-            error: 错误信息（如果失败）
+            success: Whether execution was successful
+            error: Error message (if failed)
             
         Returns:
-            Path: 保存的文件路径
+            Path: Path to the saved file
         """
-        # 生成时间戳文件名
+        # Generate timestamped filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         mode_part = f"_{mode}" if mode else ""
         filename = f"workflow_{workflow_type}{mode_part}_{timestamp}.json"
         filepath = self.memory_dir / filename
         
-        # 构建memory数据
+        # Build memory data
         memory_data = {
             "metadata": {
                 "timestamp": datetime.now().isoformat(),
@@ -104,11 +104,11 @@ class WorkflowMemory:
             "complete_state_keys": list(final_state.keys())
         }
         
-        # 保存带时间戳的文件
+        # Save timestamped file
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(memory_data, f, indent=2, ensure_ascii=False)
         
-        # 同时保存为latest.json
+        # Also save as latest.json
         mode_part = f"_{mode}" if mode else ""
         latest_path = self.memory_dir / f"latest_{workflow_type}{mode_part}.json"
         with open(latest_path, 'w', encoding='utf-8') as f:
@@ -117,7 +117,7 @@ class WorkflowMemory:
         return filepath
     
     def _extract_orchestrator_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """提取Orchestrator的输出"""
+        """Extract Orchestrator output"""
         return {
             "question_type": state.get('question_type'),
             "question_keywords": state.get('question_keywords'),
@@ -130,7 +130,7 @@ class WorkflowMemory:
         }
     
     def _extract_query_planner_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """提取Query Planner的输出"""
+        """Extract Query Planner output"""
         query_candidates = state.get('query_candidates', [])
         
         return {
@@ -147,7 +147,7 @@ class WorkflowMemory:
         }
     
     def _extract_retrieval_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """提取Retrieval的输出（只保存摘要，避免文件过大）"""
+        """Extract Retrieval output (only save summary to avoid large files)"""
         chunks = state.get('retrieved_chunks', [])
         
         return {
@@ -159,13 +159,13 @@ class WorkflowMemory:
                     "text_preview": str(self._get_attr(chunk, 'text'))[:200] + "...",
                     "metadata": self._get_attr(chunk, 'metadata')
                 }
-                for chunk in chunks[:10]  # 只保存前10个
+                for chunk in chunks[:10]  # Only save top 10
             ],
             "retrieval_metadata": state.get('retrieval_metadata', {})
         }
     
     def _extract_evidence_judge_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """提取Evidence Judge的输出"""
+        """Extract Evidence Judge output"""
         assessment = state.get('evidence_assessment', {})
         
         return {
@@ -180,7 +180,7 @@ class WorkflowMemory:
         }
     
     def _extract_query_refiner_data(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """提取Query Refiner的输出（如果有）"""
+        """Extract Query Refiner output (if exists)"""
         refined_queries = state.get('refined_queries')
         if refined_queries is None:
             return None
@@ -190,7 +190,7 @@ class WorkflowMemory:
         }
     
     def _extract_structured_extraction_data(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """提取Structured Extraction的输出（如果有）"""
+        """Extract Structured Extraction output (if exists)"""
         answer = state.get('structured_answer')
         if answer is None:
             return None
@@ -204,7 +204,7 @@ class WorkflowMemory:
         }
     
     def _get_attr(self, obj, attr: str, default=None):
-        """安全获取对象属性（支持dict和object）"""
+        """Safely get object attribute (supports both dict and object)"""
         if isinstance(obj, dict):
             return obj.get(attr, default)
         else:
@@ -212,13 +212,13 @@ class WorkflowMemory:
     
     def load_latest(self, workflow_type: str = "simple") -> Optional[Dict[str, Any]]:
         """
-        加载最新的执行记录
+        Load the latest execution record
         
         Args:
-            workflow_type: Workflow类型
+            workflow_type: Workflow type
             
         Returns:
-            Dict: Memory数据，如果不存在返回None
+            Dict: Memory data, None if not exists
         """
         latest_path = self.memory_dir / f"latest_{workflow_type}.json"
         if not latest_path.exists():
@@ -229,14 +229,14 @@ class WorkflowMemory:
     
     def list_history(self, workflow_type: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        列出历史记录
+        List execution history
         
         Args:
-            workflow_type: 可选，只列出特定类型的workflow
-            limit: 返回最近N条记录
+            workflow_type: Optional, only list specific workflow type
+            limit: Return the latest N records
             
         Returns:
-            List[Dict]: 历史记录列表（按时间倒序）
+            List[Dict]: History list (sorted by time descending)
         """
         pattern = f"workflow_{workflow_type}_*.json" if workflow_type else "workflow_*.json"
         files = sorted(
