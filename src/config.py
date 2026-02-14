@@ -54,7 +54,7 @@ class AgenticRAGConfig(BaseModel):
     azure_deployment_name_embedding: Optional[str] = None
     
     # Retrieval settings
-    retrieval_mode: str = "tool_calling"  # "direct" | "planning" | "tool_calling"
+    retrieval_mode: str = "direct"  # "direct" | "planning" | "tool_calling"
     top_k: int = 15
     max_retry: int = 2
     rrf_k: int = 60
@@ -82,8 +82,8 @@ class AgenticRAGConfig(BaseModel):
         """
         Lazy initialization of shared Azure OpenAI client
         
-        只在第一次访问config.client时创建，避免不必要的连接开销。
-        所有agents共享这个client。
+        Created only on first access to config.client to avoid unnecessary connection overhead.
+        All agents share this client instance.
         """
         if self._client is None:
             from openai import AzureOpenAI
@@ -99,7 +99,7 @@ class AgenticRAGConfig(BaseModel):
         """
         Lazy loading of CPT code descriptions
         
-        只在第一次访问时从Excel加载，之后使用缓存。
+        Loaded from Excel file on first access, then cached for subsequent use.
         
         Returns:
             dict: {code: description} mapping for CPT and HCPCS codes
@@ -114,7 +114,7 @@ class AgenticRAGConfig(BaseModel):
         """
         Lazy initialization of Azure OpenAI embedding client
         
-        用于生成embeddings，使用独立的endpoint配置。
+        Used for generating embeddings with independent endpoint configuration.
         """
         if self._embedding_client is None:
             from openai import AzureOpenAI
@@ -130,8 +130,8 @@ class AgenticRAGConfig(BaseModel):
         """
         Lazy initialization of shared ChromaDB client
         
-        ChromaDB对同一路径只允许一个PersistentClient实例，
-        所以必须共享这个client避免冲突。
+        ChromaDB only allows one PersistentClient instance per path,
+        so this client must be shared to avoid conflicts.
         """
         if self._chroma_client is None:
             import chromadb
@@ -150,9 +150,9 @@ class AgenticRAGConfig(BaseModel):
     @classmethod
     def from_env(cls) -> "AgenticRAGConfig":
         """
-        从环境变量加载配置（推荐方式）
+        Load configuration from environment variables (recommended approach)
         
-        用法:
+        Usage:
             config = AgenticRAGConfig.from_env()
             client = config.client  # Lazy initialization
         """
@@ -182,7 +182,7 @@ class AgenticRAGConfig(BaseModel):
             ),
         )
         
-        # 确保所有目录存在
+        # Ensure all directories exist
         config.ensure_directories()
         
         return config
