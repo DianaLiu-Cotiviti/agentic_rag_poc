@@ -1,11 +1,11 @@
 """
-测试Simple Agentic RAG Workflow
+Test Simple Agentic RAG Workflow
 ================================
 
-验证整个agent pipeline从头到尾是否正常工作：
+Verify the entire agent pipeline works from end to end:
 User Query → Orchestrator → Query Planner → Retrieval Router → Evidence Judge
 
-注意：Workflow自动保存执行结果到memory/目录
+Note: Workflow automatically saves execution results to memory/ directory
 """
 
 import sys
@@ -17,13 +17,13 @@ from src.workflow_simple import SimpleAgenticRAGWorkflow
 
 
 def test_simple_workflow():
-    """测试简化workflow的完整流程"""
+    """Test complete simplified workflow"""
     
     print("="*80)
     print("🧪 Testing Simple Agentic RAG Workflow")
     print("="*80)
     
-    # 从环境变量加载配置
+    # Load configuration from environment variables
     config = AgenticRAGConfig.from_env()
     
     print(f"\n📋 Configuration:")
@@ -31,10 +31,10 @@ def test_simple_workflow():
     print(f"   Top K: {config.top_k}")
     print(f"   Memory Dir: {config.memory_dir}")
     
-    # 创建workflow（自动启用memory）
+    # Create workflow (automatically enable memory)
     workflow = SimpleAgenticRAGWorkflow(config, enable_memory=True)
     
-    # 测试问题
+    # Test question
     test_question = "What scenarios can't be reported with CPT code 44180?"
     test_cpt_code = 44180
     
@@ -42,7 +42,7 @@ def test_simple_workflow():
     print(f"🏥 CPT Code: {test_cpt_code}")
     
     try:
-        # 运行workflow（自动保存到memory）
+        # Run workflow (automatically save to memory)
         result = workflow.run(question=test_question)
         
         print("\n" + "="*80)
@@ -107,7 +107,7 @@ def test_simple_workflow():
         print("✅ All steps completed successfully!")
         print("="*80)
         
-        # 验证关键字段
+        # Verify key fields
         checks = [
             ("Orchestrator set question_type", result.get('question_type') is not None),
             ("Orchestrator set complexity", result.get('question_complexity') is not None),
@@ -147,13 +147,13 @@ def test_simple_workflow():
 
 
 def test_multiple_modes():
-    """测试不同的retrieval模式"""
+    """Test different retrieval modes"""
     
     print("\n" + "="*80)
     print("🔄 Testing Different Retrieval Modes")
     print("="*80)
     
-    modes = ["direct", "planning"]  # tool_calling需要更多LLM调用
+    modes = ["direct", "planning"]  # tool_calling requires more LLM calls
     test_question = "What is CPT code 14301?"
     
     results = {}
@@ -189,7 +189,7 @@ def test_multiple_modes():
             print(f"❌ {mode} mode failed: {e}")
             results[mode] = {'success': False, 'error': str(e)}
     
-    # 对比结果
+    # Compare results
     print("\n" + "="*80)
     print("📊 Mode Comparison")
     print("="*80)
@@ -208,10 +208,10 @@ def test_multiple_modes():
 
 
 if __name__ == "__main__":
-    # Test 1: 基础workflow测试
+    # Test 1: Basic workflow test
     success = test_simple_workflow()
     
-    # Test 2: 多模式对比测试（可选）
+    # Test 2: Multi-mode comparison test (optional)
     # Uncomment to run mode comparison
     # success = success and test_multiple_modes()
     
