@@ -38,12 +38,12 @@ def load_chunks(path: str):
 
 def build_embeddings(chunks_path: str, chroma_db_path: str, config=None):
     """
-    构建ChromaDB Embeddings Index
+    Build ChromaDB Embeddings Index
     
     Args:
-        chunks_path: chunks.jsonl文件路径
-        chroma_db_path: ChromaDB存储目录
-        config: AgenticRAGConfig实例（可选，如果不提供则从环境变量加载）
+        chunks_path: Path to chunks.jsonl file
+        chroma_db_path: ChromaDB storage directory
+        config: AgenticRAGConfig instance (optional, loads from environment if not provided)
     """
     # Load config if not provided
     if config is None:

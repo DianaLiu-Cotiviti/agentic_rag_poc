@@ -2,17 +2,17 @@
 Unified Index Building Script
 ==============================
 
-自动检测并构建所有需要的索引：
+Automatically detects and builds all required indexes:
 1. Range Index (SQLite)
 2. BM25 Index (Pickle)
 3. Embeddings Index (ChromaDB)
 
-如果index已存在则跳过，如果不存在则自动构建。
+Skips if index already exists; automatically builds if missing.
 
-用法:
+Usage:
     from src.tools.build_indexes import ensure_all_indexes
     
-    # 在workflow开始前调用
+    # Call before workflow starts
     ensure_all_indexes()
 """
 
@@ -24,22 +24,22 @@ from typing import Tuple
 
 def check_range_index_exists(index_path: str) -> bool:
     """
-    检查Range Index是否存在且有效
+    Check if Range Index exists and is valid
     
     Args:
-        index_path: Range index数据库路径
+        index_path: Range index database path
         
     Returns:
-        bool: 是否存在且有效
+        bool: Whether it exists and is valid
     """
     if not os.path.exists(index_path):
         return False
     
-    # 检查文件大小（应该大于0）
+    # Check file size (should be > 0)
     if os.path.getsize(index_path) == 0:
         return False
     
-    # 检查是否是有效的SQLite数据库
+    # Check if it's a valid SQLite database
     try:
         import sqlite3
         conn = sqlite3.connect(index_path)
@@ -48,7 +48,7 @@ def check_range_index_exists(index_path: str) -> bool:
         count = cursor.fetchone()[0]
         conn.close()
         
-        # 至少应该有一些记录
+        # Should have at least some records
         return count > 0
     except Exception:
         return False
@@ -56,27 +56,27 @@ def check_range_index_exists(index_path: str) -> bool:
 
 def check_bm25_index_exists(index_path: str) -> bool:
     """
-    检查BM25 Index是否存在且有效
+    Check if BM25 Index exists and is valid
     
     Args:
-        index_path: BM25 index pickle文件路径
+        index_path: BM25 index pickle file path
         
     Returns:
-        bool: 是否存在且有效
+        bool: Whether it exists and is valid
     """
     if not os.path.exists(index_path):
         return False
     
-    # 检查文件大小（应该大于0）
+    # Check file size (should be > 0)
     if os.path.getsize(index_path) == 0:
         return False
     
-    # 尝试加载验证
+    # Try loading for validation
     try:
         import pickle
         with open(index_path, 'rb') as f:
             data = pickle.load(f)
-        # 检查是否有必要的字段
+        # Check if required fields exist
         return 'bm25' in data and 'chunk_ids' in data
     except Exception:
         return False
@@ -84,31 +84,31 @@ def check_bm25_index_exists(index_path: str) -> bool:
 
 def check_chroma_index_exists(chroma_dir: str) -> bool:
     """
-    检查ChromaDB Index是否存在且有效
+    Check if ChromaDB Index exists and is valid
     
     Args:
-        chroma_dir: ChromaDB存储目录
+        chroma_dir: ChromaDB storage directory
         
     Returns:
-        bool: 是否存在且有效
+        bool: Whether it exists and is valid
     """
     if not os.path.exists(chroma_dir):
         return False
     
-    # 检查chroma.sqlite3文件是否存在且有内容
-    # 避免创建ChromaDB client（会导致多个client冲突）
+    # Check if chroma.sqlite3 file exists and has content
+    # Avoid creating ChromaDB client (would cause multiple client conflicts)
     sqlite_path = os.path.join(chroma_dir, "chroma.sqlite3")
     if not os.path.exists(sqlite_path):
         return False
     
-    # 检查文件大小（应该大于0）
+    # Check file size (should be > 0)
     if os.path.getsize(sqlite_path) == 0:
         return False
     
-    # 简单检查是否有vector segment目录（UUID命名的目录）
+    # Simple check for vector segment directories (UUID-named directories)
     try:
         items = os.listdir(chroma_dir)
-        # 至少应该有chroma.sqlite3和一些UUID目录
+        # Should have at least chroma.sqlite3 and some UUID directories
         uuid_dirs = [item for item in items if len(item) == 36 and item.count('-') == 4]
         return len(uuid_dirs) > 0
     except Exception:
@@ -117,15 +117,15 @@ def check_chroma_index_exists(chroma_dir: str) -> bool:
 
 def build_range_index(chunks_path: str, index_path: str) -> None:
     """
-    构建Range Index
+    Build Range Index
     
     Args:
-        chunks_path: chunks.jsonl文件路径
-        index_path: 输出的数据库路径
+        chunks_path: chunks.jsonl file path
+        index_path: Output database path
     """
     print("\n🔨 Building Range Index...")
     
-    # 动态导入build脚本
+    # Dynamically import build script
     from .build_range_index import build_range_db_index
     
     build_range_db_index(chunks_path, index_path)
@@ -134,11 +134,11 @@ def build_range_index(chunks_path: str, index_path: str) -> None:
 
 def build_bm25_index(chunks_path: str, index_path: str) -> None:
     """
-    构建BM25 Index
+    Build BM25 Index
     
     Args:
-        chunks_path: chunks.jsonl文件路径
-        index_path: 输出的pickle文件路径
+        chunks_path: chunks.jsonl file path
+        index_path: Output pickle file path
     """
     print("\n🔨 Building BM25 Index...")
     
@@ -164,16 +164,16 @@ def build_bm25_index(chunks_path: str, index_path: str) -> None:
 
 def build_chroma_index(chunks_path: str, chroma_dir: str, config=None) -> None:
     """
-    构建ChromaDB Embeddings Index
+    Build ChromaDB Embeddings Index
     
     Args:
-        chunks_path: chunks.jsonl文件路径
-        chroma_dir: ChromaDB存储目录
-        config: AgenticRAGConfig实例（可选）
+        chunks_path: chunks.jsonl file path
+        chroma_dir: ChromaDB storage directory
+        config: AgenticRAGConfig instance (optional)
     """
     print("\n🔨 Building ChromaDB Embeddings Index...")
     
-    # 动态导入build脚本
+    # Dynamically import build script
     from .build_embeddings_chroma import build_embeddings
     
     build_embeddings(chunks_path, chroma_dir, config=config)
@@ -189,15 +189,15 @@ def ensure_all_indexes(
     config=None
 ) -> Tuple[bool, bool, bool]:
     """
-    确保所有index都已构建
+    Ensure all indexes are built
     
     Args:
-        chunks_path: Chunks文件路径
-        range_index_path: Range index数据库路径
-        bm25_index_path: BM25 index pickle路径
-        chroma_dir: ChromaDB存储目录
-        force_rebuild: 是否强制重建所有index
-        config: AgenticRAGConfig实例（可选，用于embedding client）
+        chunks_path: Chunks file path
+        range_index_path: Range index database path
+        bm25_index_path: BM25 index pickle path
+        chroma_dir: ChromaDB storage directory
+        force_rebuild: Whether to force rebuild all indexes
+        config: AgenticRAGConfig instance (optional, for embedding client)
         
     Returns:
         Tuple[bool, bool, bool]: (range_built, bm25_built, chroma_built)
@@ -206,14 +206,14 @@ def ensure_all_indexes(
     print("📦 Checking and Building Indexes...")
     print("="*80)
     
-    # 检查chunks文件是否存在
+    # Check if chunks file exists
     if not os.path.exists(chunks_path):
         raise FileNotFoundError(
             f"Chunks file not found: {chunks_path}\n"
             "Please ensure you have run the data preparation step first."
         )
     
-    # 确保输出目录存在
+    # Ensure output directories exist
     os.makedirs(os.path.dirname(range_index_path), exist_ok=True)
     os.makedirs(os.path.dirname(bm25_index_path), exist_ok=True)
     os.makedirs(chroma_dir, exist_ok=True)

@@ -82,11 +82,11 @@ def weight_for(chapter: str, section: str, tags: List[str],
 
 def build_range_db_index(chunks_path: str, index_path: str):
     """
-    构建Range Index
+    Build Range Index
     
     Args:
-        chunks_path: chunks.jsonl文件路径
-        index_path: 输出的数据库路径
+        chunks_path: Path to chunks.jsonl file
+        index_path: Output database path
     """
     conn = sqlite3.connect(index_path)
     cur = conn.cursor()

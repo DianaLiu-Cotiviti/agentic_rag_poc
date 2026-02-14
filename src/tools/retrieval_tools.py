@@ -45,7 +45,7 @@ class RetrievalTools:
         # Load chunks map
         self.chunks_map = self._load_chunks_map(config.chunks_path)
         
-        # Initialize embedding client (使用独立的embedding endpoint)
+        # Initialize embedding client (using separate embedding endpoint)
         self.embedding_client = AzureOpenAI(
             api_key=config.azure_openai_api_key_embedding,
             api_version=config.azure_api_version_embedding,
@@ -56,6 +56,10 @@ class RetrievalTools:
         # Initialize range index connection (keep open for performance)
         self.range_conn = sqlite3.connect(config.range_index_path)
         self.range_conn.row_factory = sqlite3.Row  # Enable column access by name
+        
+        # Initialize logger
+        import logging
+        self.logger = logging.getLogger("agenticrag.retrieval_tools")
     
     def _validate_indices(self):
         """
@@ -327,7 +331,7 @@ class RetrievalTools:
         
         This is an ORCHESTRATION-LEVEL tool that combines multiple retrieval steps.
         
-        Workflow:
+        Steps:
         1. Range routing with CPT codes (if provided) - pre-filter relevant chunks
         2. Execute hybrid search for each query candidate
         3. Weight results by candidate weight
@@ -358,18 +362,17 @@ class RetrievalTools:
             It should NOT be exposed to LLMs - they should compose primitives instead.
             Direct mode uses it to avoid code duplication and ensure consistency.
         """
-        print("\n" + "="*100)
-        print("🔍 Multi-Query Hybrid Search 执行流程追踪")
-        print("="*100)
+        self.logger.info("🔍 Multi-Query Hybrid Search Execution Flow Trace")
+        self.logger.info("—"*100)
         
-        # 显示输入参数
-        print(f"\n📥 输入参数:")
-        print(f"   - Query Candidates: {len(query_candidates)} 个")
+        # Display input parameters
+        self.logger.info(f"\n📥 Input Parameters:")
+        self.logger.info(f"   - Query Candidates: {len(query_candidates)} queries")
         for idx, qc in enumerate(query_candidates, 1):
             has_guidance = hasattr(qc, 'guidance') and qc.guidance is not None
-            print(f"     {idx}. {qc.query[:60]}... (type={qc.query_type}, weight={qc.weight}, guidance={has_guidance})")
-        print(f"   - CPT Codes: {cpt_codes if cpt_codes else 'None'}")
-        print(f"   - Top K: {top_k}")
+            self.logger.info(f"     {idx}. {qc.query[:60]}... (type={qc.query_type}, weight={qc.weight}, guidance={has_guidance})")
+        self.logger.info(f"   - CPT Codes: {cpt_codes if cpt_codes else 'None'}")
+        self.logger.info(f"   - Top K: {top_k}")
         
         all_chunk_ids = set()
         retrieval_stats = {
@@ -381,39 +384,32 @@ class RetrievalTools:
         }
         
         # Step 1: Range routing if CPT codes provided (supports multiple codes)
-        print(f"\n📌 Step 1: Range Routing (预过滤相关 chunks)")
+        self.logger.info(f"\n📌 Step 1: Range Routing (pre-filter relevant chunks)")
         range_chunks = set()
         if cpt_codes:
-            print(f"   CPT Codes: {cpt_codes}")
+            self.logger.info(f"   CPT Codes: {cpt_codes}")
             for cpt_code in cpt_codes:
                 chunks = self.range_routing(cpt_code, limit=300)
-                print(f"   - CPT {cpt_code}: 找到 {len(chunks)} 个 chunks")
+                self.logger.info(f"   - CPT {cpt_code}: found {len(chunks)} chunks")
                 range_chunks.update(chunks)
             all_chunk_ids.update(range_chunks)
             retrieval_stats["range_routing_count"] = len(range_chunks)
-            print(f"   ✅ Range Routing 总计: {len(range_chunks)} 个去重后的 chunks")
+            self.logger.info(f"   ✅ Range Routing Total: {len(range_chunks)} deduplicated chunks")
         else:
-            print(f"   ⏭️  无 CPT codes，跳过 Range Routing")
+            self.logger.info(f"   ⏭️  No CPT codes, skipping Range Routing")
         
         # Step 2: Execute multiple queries with hybrid search using guidance
-        print(f"\n📌 Step 2: Hybrid Search (每个 query candidate 使用 guidance 增强)")
-        print(f"   Query Candidates 数量: {len(query_candidates)}")
+        self.logger.info(f"\n📌 Step 2: Hybrid Search (each query candidate enhanced with guidance)")
+        self.logger.info(f"   Query Candidates count: {len(query_candidates)}")
         query_results = []
         for idx, candidate in enumerate(query_candidates, 1):
             # Use guidance if available
             guidance = candidate.guidance if hasattr(candidate, 'guidance') else None
-            has_guidance = guidance is not None and guidance.semantic_guidance
             
-            print(f"\n   Query {idx}/{len(query_candidates)}:")
-            print(f"   - Query: {candidate.query[:80]}{'...' if len(candidate.query) > 80 else ''}")
-            print(f"   - Query Type: {candidate.query_type}")
-            print(f"   - Weight: {candidate.weight}")
-            print(f"   - Has Guidance: {has_guidance}")
-            
-            if has_guidance:
-                guidance_preview = guidance.semantic_guidance[:100].replace('\n', ' ')
-                print(f"   - Guidance Preview: {guidance_preview}...")
-                print(f"   - Boost Terms: {guidance.boost_terms}")
+            self.logger.info(f"\n   Query {idx}/{len(query_candidates)}:")
+            self.logger.info(f"   - Query: {candidate.query[:80]}{'...' if len(candidate.query) > 80 else ''}")
+            self.logger.info(f"   - Query Type: {candidate.query_type}")
+            self.logger.info(f"   - Weight: {candidate.weight}")
             
             results = self.hybrid_search(
                 candidate.query, 
@@ -421,33 +417,34 @@ class RetrievalTools:
                 guidance=guidance
             )
             
-            print(f"   ✅ Hybrid Search 返回: {len(results)} 个 chunks")
+            self.logger.info(f"   ✅ Hybrid Search returned: {len(results)} chunks")
             if results:
-                print(f"      Top 3 scores (before weight): {[f'{r.score:.4f}' for r in results[:3]]}")
+                self.logger.info(f"      Top 3 scores (before weight): {[f'{r.score:.4f}' for r in results[:3]]}")
             
             # Weight results by query candidate weight
             for r in results:
                 r.score *= candidate.weight
             
             if candidate.weight != 1.0 and results:
-                print(f"      Top 3 scores (after weight {candidate.weight}): {[f'{r.score:.4f}' for r in results[:3]]}")
+                self.logger.info(f"      Top 3 scores (after weight {candidate.weight}): {[f'{r.score:.4f}' for r in results[:3]]}")
             
             query_results.append(results)
         
         # Step 3: Fuse all query results
-        print(f"\n📌 Step 3: RRF Fusion (融合所有 query 的结果)")
+        self.logger.info(f"\n📌 Step 3: RRF Fusion (fuse results from all queries)")
         all_results = []
         for results in query_results:
             all_results.extend(results)
-        print(f"   合并前总 chunks: {len(all_results)} (包含重复)")
+        
+        self.logger.info(f"   Total chunks before merge: {len(all_results)} (including duplicates)")
         
         # Layer 2 Reranking: RRF fusion across queries (Query-level)
         # Purpose: Combine results from different sub-queries (multi-perspective)
         fused_scores = self._rrf_fuse(*query_results)
-        print(f"   Layer 2 RRF 融合后去重 chunks: {len(fused_scores)}")
+        self.logger.info(f"   Layer 2 RRF deduplicated chunks after fusion: {len(fused_scores)}")
         
         # Boost range routing chunks
-        print(f"\n📌 Step 4: Boost Range Routing Chunks (增强预过滤的 chunks)")
+        self.logger.info(f"\n📌 Step 4: Boost Range Routing Chunks (enhance pre-filtered chunks)")
         boosted_count = 0
         for chunk_id in range_chunks:
             if chunk_id in fused_scores:
@@ -456,28 +453,28 @@ class RetrievalTools:
                 boosted_count += 1
         
         if range_chunks:
-            print(f"   Range chunks: {len(range_chunks)}")
-            print(f"   在 RRF 结果中找到并 boost: {boosted_count} 个 (增强 50%)")
-            print(f"   未在 RRF 结果中的 range chunks: {len(range_chunks) - boosted_count}")
+            self.logger.info(f"   Range chunks: {len(range_chunks)}")
+            self.logger.info(f"   Found and boosted in RRF results: {boosted_count} chunks (50% boost)")
+            self.logger.info(f"   Range chunks not in RRF results: {len(range_chunks) - boosted_count}")
         else:
-            print(f"   ⏭️  无 range chunks，跳过 boost")
+            self.logger.info(f"   ⏭️  No range chunks, skipping boost")
         
         # Sort and take top_k
-        print(f"\n📌 Step 5: 排序和截断 (取 top {top_k})")
+        self.logger.info(f"\n📌 Step 5: Sort and Truncate (take top {top_k})")
         sorted_chunks = sorted(
             fused_scores.items(), 
             key=lambda x: x[1], 
             reverse=True
         )[:top_k]
         
-        print(f"   最终返回: {len(sorted_chunks)} 个 chunks")
+        self.logger.info(f"   Final return: {len(sorted_chunks)} chunks")
         if sorted_chunks:
-            print(f"   Top 5 最终分数: {[f'{score:.4f}' for _, score in sorted_chunks[:5]]}")
+            self.logger.info(f"   Top 5 final scores: {[f'{score:.4f}' for _, score in sorted_chunks[:5]]}")
             
-            # 统计 top_k 中有多少来自 range routing
+            # Count how many in top_k come from range routing
             range_in_top = sum(1 for chunk_id, _ in sorted_chunks if chunk_id in range_chunks)
             if range_chunks:
-                print(f"   Top {top_k} 中来自 Range Routing: {range_in_top} ({range_in_top/len(sorted_chunks)*100:.1f}%)")
+                self.logger.info(f"   Top {top_k} from Range Routing: {range_in_top} ({range_in_top/len(sorted_chunks)*100:.1f}%)")
         
         # Convert to RetrievalResult
         final_results = []
@@ -493,10 +490,9 @@ class RetrievalTools:
         retrieval_stats["total_candidates"] = len(all_chunk_ids)
         retrieval_stats["final_count"] = len(final_results)
         
-        print(f"\n{'='*100}")
-        print(f"✅ Multi-Query Hybrid Search 完成")
-        print(f"   统计信息: {retrieval_stats}")
-        print(f"{'='*100}\n")
+        self.logger.info(f"✅ Multi-Query Hybrid Search Complete")
+        self.logger.info(f"   Statistics: {retrieval_stats}")
+        self.logger.info(f"{'—'*100}\n")
         
         return final_results, retrieval_stats
     
@@ -508,16 +504,15 @@ class RetrievalTools:
         model_name: str = None
     ) -> List[RetrievalResult]:
         """
-        Layer 3 Reranking: Cross-Encoder对chunks重新排序
+        Layer 3 Reranking: Cross-Encoder reranks chunks
         
         Cross-encoder vs Bi-encoder:
-        - Bi-encoder (Semantic Search): query和doc分别编码，余弦相似度（快，适合大规模）
-        - Cross-encoder: query+doc一起编码，深度交互（慢，适合精排）
+        - Cross-encoder: query+doc encoded together, deep interaction (slow, suitable for reranking)
+        - Bi-encoder: query and doc encoded separately, fast matching (fast, suitable for recall)
         
-        使用场景:
-        - Layer 1-2已经缩小范围到15-20个候选chunks
-        - 需要基于original question精确排序top 10
-        - Evidence Judge或Answer Generator需要高质量输入
+        Use case:
+        - Layer 1-2 have already narrowed down to 15-20 candidate chunks
+        - Evidence Judge or Answer Generator needs high-quality input
         
         Args:
             query: Original user question
@@ -529,13 +524,11 @@ class RetrievalTools:
             Top-K reranked chunks with updated scores
             
         Example:
-            >>> chunks = retrieval_tools.multi_query_hybrid_search(...)  # 20 chunks
-            >>> top10 = retrieval_tools.cross_encoder_rerank(
+            >>> reranked = tools.cross_encoder_rerank(
             ...     query="What is CPT 14301?",
-            ...     chunks=chunks,
+            ...     chunks=hybrid_results,
             ...     top_k=10
             ... )
-            >>> # top10 are the most relevant to the question
         """
         try:
             from sentence_transformers import CrossEncoder
@@ -544,10 +537,9 @@ class RetrievalTools:
             # Use provided model or config default
             model = model_name or self.config.cross_encoder_model
             
-            # Lazy load cross-encoder model with retry mechanism
+            # Load model if not already loaded or if different model requested
             if not hasattr(self, '_cross_encoder') or self._cross_encoder_model != model:
-                print(f"   📦 Loading cross-encoder: {model}")
-                
+                # Silently load cross-encoder model
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
@@ -557,18 +549,17 @@ class RetrievalTools:
                             device=None  # Auto-detect device (CPU/GPU)
                         )
                         self._cross_encoder_model = model
-                        print(f"   ✅ Cross-encoder loaded successfully")
                         break
                     except Exception as load_error:
                         if attempt < max_retries - 1:
-                            print(f"   ⚠️  Load attempt {attempt + 1} failed: {load_error}")
-                            print(f"   🔄 Retrying in 2 seconds...")
+                            self.logger.info(f"   ⚠️  Load attempt {attempt + 1} failed: {load_error}")
+                            self.logger.info(f"   🔄 Retrying in 2 seconds...")
                             time.sleep(2)
                         else:
-                            raise load_error
+                            raise
             
-            # Prepare query-document pairs (limit text length for efficiency)
-            pairs = [(query, chunk.text[:512]) for chunk in chunks]
+            # Prepare pairs for cross-encoder
+            pairs = [(query, chunk.text) for chunk in chunks]
             
             # Batch predict scores
             ce_scores = self._cross_encoder.predict(pairs)
@@ -596,30 +587,29 @@ class RetrievalTools:
                 )
                 reranked_chunks.append(reranked_chunk)
             
-            # Print statistics
-            print(f"   📊 CE Score range: {ce_scores.max():.4f} (max) → {ce_scores.min():.4f} (min)")
-            print(f"   🏆 Top 5 scores: {[f'{s:.4f}' for s in sorted(ce_scores, reverse=True)[:5]]}")
+            # Statistics available but not logged to keep UI clean
+            # CE Score range and top scores are computed during reranking
             
             return reranked_chunks
             
         except ImportError:
-            print("   ⚠️  sentence-transformers not installed, skipping reranking")
-            print("   💡 Install with: pip install sentence-transformers")
+            self.logger.info("   ⚠️  sentence-transformers not installed, skipping reranking")
+            self.logger.info("   💡 Install with: pip install sentence-transformers")
             return chunks[:top_k]
         except Exception as e:
             error_msg = str(e)
-            print(f"   ❌ Cross-encoder reranking failed: {error_msg}")
+            self.logger.info(f"   ❌ Cross-encoder reranking failed: {error_msg}")
             
             # Provide helpful troubleshooting
             if "Can't load the model" in error_msg or "pytorch_model.bin" in error_msg:
-                print(f"   💡 Troubleshooting:")
-                print(f"      1. Model download may be incomplete - try running again")
-                print(f"      2. Check internet connection")
-                print(f"      3. Try alternative model: cross-encoder/ms-marco-MiniLM-L-6-v2 (smaller)")
-                print(f"      4. Set HF_TOKEN for faster downloads: export HF_TOKEN=your_token")
-                print(f"      5. Or disable cross-encoder in config: use_cross_encoder_rerank=False")
+                self.logger.info(f"   💡 Troubleshooting:")
+                self.logger.info(f"      1. Model download may be incomplete - try running again")
+                self.logger.info(f"      2. Check internet connection")
+                self.logger.info(f"      3. Try alternative model: cross-encoder/ms-marco-MiniLM-L-6-v2 (smaller)")
+                self.logger.info(f"      4. Set HF_TOKEN for faster downloads: export HF_TOKEN=your_token")
+                self.logger.info(f"      5. Or disable cross-encoder in config: use_cross_encoder_rerank=False")
             
-            print(f"   ↩️  Falling back to original top-{top_k}")
+            self.logger.info(f"   ↩️  Falling back to original top-{top_k}")
             return chunks[:top_k]
     
     def merge_chunks_in_retry(
@@ -631,14 +621,14 @@ class RetrievalTools:
         top_k: int = 20
     ) -> tuple[List[RetrievalResult], dict]:
         """
-        智能合并旧/新 chunks（仅在 retry 时使用）- OpenAI 标准方法
+        Intelligently merge old/new chunks (only used during retry) - OpenAI standard method
         
-        策略：
-        1. 保留旧 chunks (1-5个，由 adaptive selection 决定)
-        2. 新 chunks 去重 + 质量门槛（score >= 0.75）
-        3. 优先选择解决 missing_aspects 的 chunks（加权 10%）
-        4. RRF 融合
-        5. 多样性过滤（同一文档最多 3 chunks）
+        Strategy:
+        1. Keep old chunks (1-5 chunks, determined by adaptive selection)
+        2. Deduplicate new chunks + quality threshold (score >= 0.75)
+        3. Prioritize chunks that address missing_aspects (weighted 10%)
+        4. RRF fusion
+        5. Diversity filtering (max 3 chunks per document)
         
         Args:
             keep_chunks: Adaptively selected chunks from previous round (1-5 chunks)
@@ -650,56 +640,56 @@ class RetrievalTools:
         Returns:
             Tuple of (merged_chunks, merge_stats)
         """
-        print(f"\n🔀 Merging Chunks (Retry Mode - OpenAI Strategy):")
-        print(f"   Old chunks (adaptive selection): {len(keep_chunks)}")
-        print(f"   New chunks (candidates): {len(new_chunks)}")
+        self.logger.info(f"\n🔀 Merging Chunks (Retry Mode - OpenAI Strategy):")
+        self.logger.info(f"   Old chunks (adaptive selection): {len(keep_chunks)}")
+        self.logger.info(f"   New chunks (candidates): {len(new_chunks)}")
         
-        # 1️⃣ 显示保留的旧 chunks (动态数量: 1-5)
-        print(f"\n   📌 Keeping {len(keep_chunks)} high-quality chunks from previous round:")
+        # 1️⃣ Display kept old chunks (dynamic count: 1-5)
+        self.logger.info(f"\n   📌 Keeping {len(keep_chunks)} high-quality chunks from previous round:")
         for i, chunk in enumerate(keep_chunks, 1):
-            print(f"      {i}. {chunk.chunk_id} (score: {chunk.score:.4f})")
+            self.logger.info(f"      {i}. {chunk.chunk_id} (score: {chunk.score:.4f})")
         
-        # 2️⃣ 过滤新 chunks：去重 + 质量门槛
+        # 2️⃣ Filter new chunks: deduplicate + quality threshold
         qualified_new = []
         old_chunk_ids = {c.chunk_id for c in keep_chunks}
         
         for new_chunk in new_chunks:
-            # 质量门槛
+            # Quality threshold
             if new_chunk.score < quality_threshold:
                 continue
             
-            # 去重检查（简单版：chunk_id）
+            # Deduplication check (simple: chunk_id)
             if new_chunk.chunk_id in old_chunk_ids:
                 continue
             
-            # 优先级加权：解决 missing_aspects 的 chunk 加分
+            # Priority weighting: boost chunks that address missing_aspects
             if self._addresses_missing_aspect(new_chunk, missing_aspects):
-                new_chunk.score *= 1.1  # 加权 10%
+                new_chunk.score *= 1.1  # Boost by 10%
                 new_chunk._was_boosted = True  # Mark for stats
-                print(f"   ✨ Boosted {new_chunk.chunk_id} (addresses missing aspect)")
+                self.logger.info(f"   ✨ Boosted {new_chunk.chunk_id} (addresses missing aspect)")
             
             qualified_new.append(new_chunk)
         
-        print(f"\n   ✅ Qualified new chunks: {len(qualified_new)}")
-        print(f"      (Filtered: score >= {quality_threshold}, no duplicates)")
+        self.logger.info(f"\n   ✅ Qualified new chunks: {len(qualified_new)}")
+        self.logger.info(f"      (Filtered: score >= {quality_threshold}, no duplicates)")
         
-        # 3️⃣ RRF 融合（基于 chunk.score）
+        # 3️⃣ RRF fusion (based on chunk.score)
         all_chunks = keep_chunks + qualified_new
         merged = self._reciprocal_rank_fusion_merge(all_chunks)
         
-        # 4️⃣ 多样性过滤（避免都来自同一文档）
+        # 4️⃣ Diversity filtering (avoid all from same document)
         final = self._enforce_diversity(merged, max_per_doc=3, top_k=top_k)
         
-        # 统计信息
+        # Statistics
         kept_old_count = min(len(keep_chunks), len(final))
         new_in_final = len(final) - kept_old_count
         duplicates_removed = len(new_chunks) - len(qualified_new)
         boosted_count = sum(1 for c in qualified_new if hasattr(c, '_was_boosted'))
         
-        print(f"\n   🎯 Final merged chunks: {len(final)}")
+        self.logger.info(f"\n   🎯 Final merged chunks: {len(final)}")
         if final:
-            print(f"      Score range: {final[0].score:.4f} - {final[-1].score:.4f}")
-        print(f"      Composition: {kept_old_count} old + {new_in_final} new")
+            self.logger.info(f"      Score range: {final[0].score:.4f} - {final[-1].score:.4f}")
+        self.logger.info(f"      Composition: {kept_old_count} old + {new_in_final} new")
         
         merge_stats = {
             'kept_old_chunks': kept_old_count,
@@ -713,37 +703,37 @@ class RetrievalTools:
         return final, merge_stats
     
     def _addresses_missing_aspect(self, chunk, missing_aspects):
-        """检查 chunk 是否解决了某个 missing aspect"""
+        """Check if chunk addresses any missing aspect"""
         if not missing_aspects:
             return False
         
         chunk_text_lower = chunk.text.lower()
         for aspect in missing_aspects:
-            # 简单关键词匹配
+            # Simple keyword matching
             aspect_keywords = aspect.lower().split()
             if any(keyword in chunk_text_lower for keyword in aspect_keywords):
                 return True
         return False
     
     def _reciprocal_rank_fusion_merge(self, chunks, k=60):
-        """RRF 融合（基于 chunk.score 排序）
+        """RRF fusion (based on chunk.score ranking)
         
         Returns chunks sorted by RRF score, with original score preserved
         """
-        # 按 score 排序
+        # Sort by score
         sorted_chunks = sorted(chunks, key=lambda c: c.score, reverse=True)
         
-        # 计算 RRF score 并存储在字典中（不修改 Pydantic 对象）
+        # Calculate RRF score and store in dictionary (don't modify Pydantic object)
         rrf_scores = {}
         for rank, chunk in enumerate(sorted_chunks):
             rrf_score = 1.0 / (rank + k)
             rrf_scores[chunk.chunk_id] = rrf_score
         
-        # 按 RRF score 重新排序（保留原 score 用于后续 cross-encoder）
+        # Re-sort by RRF score (preserve original score for later cross-encoder)
         return sorted(sorted_chunks, key=lambda c: rrf_scores[c.chunk_id], reverse=True)
     
     def _enforce_diversity(self, chunks, max_per_doc=3, top_k=20):
-        """确保多样性：同一文档最多 max_per_doc 个 chunks"""
+        """Ensure diversity: max max_per_doc chunks per document"""
         doc_count = {}
         diverse_chunks = []
         
