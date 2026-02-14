@@ -1,15 +1,26 @@
 """
-Tool Calling Retrieval Router - LLM驱动的工具调用
+Tool Calling Retrieval Router - LLM-driven tool calling
 
-特点：
-- 5-15次LLM调用（multi-turn conversation）
-- LLM根据中间结果动态调整策略
-- 完全agentic，智能
-- 慢（~10秒）
-- 贵（$0.05-0.10）
+Characteristics:
+- 5-15 LLM calls (multi-turn conversation)
+- LLM dynamically adjusts strategy based on intermediate results
+- Fully agentic and intelligent
+- Slow (~10 seconds)
+- Expensive ($0.05-0.10)
 """
 
 import json
+import logging
+import sys
+
+# Initialize logger for tool calling router
+logger = logging.getLogger("agenticrag.retrieval_router_tool_calling")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
 from typing import List, Dict, Any
 from ..state import AgenticRAGState, RetrievalResult, SearchGuidance
 from ..prompts.search_guidance_templates import (
@@ -29,18 +40,18 @@ from ..prompts.retrieval_router_prompts import (
 
 class ToolCallingRetrievalRouter:
     """
-    Tool Calling模式 - LLM亲自调用工具
+    Tool Calling Mode - LLM directly calls tools
     
-    执行流程：
-    1. 构建tool definitions（5个工具）
-    2. LLM看到问题和工具列表
-    3. Multi-turn对话：
-       - LLM决定call哪个tool
-       - Agent执行tool
-       - 返回结果给LLM
-       - LLM看到结果后决定下一步
-       - 循环直到LLM说"完成"
-    4. 汇总所有工具调用的结果
+    Execution Flow:
+    1. Build tool definitions (5 tools)
+    2. LLM sees the question and tool list
+    3. Multi-turn dialogue:
+       - LLM decides which tool to call
+       - Agent executes tool
+       - Return results to LLM
+       - LLM decides next step after seeing results
+       - Loop until LLM says "done"
+    4. Aggregate all tool call results
     """
     
     def __init__(self, config, tools, client=None):
@@ -57,7 +68,7 @@ class ToolCallingRetrievalRouter:
     
     def process(self, state: AgenticRAGState) -> dict:
         """
-        LLM驱动的工具调用模式
+        LLM-driven tool calling mode
         
         Supports retry mode: uses refined_queries when retry_count > 0
         
@@ -79,7 +90,7 @@ class ToolCallingRetrievalRouter:
         if retry_count > 0 and state.get("refined_queries"):
             # Retry mode: use refined queries from Query Refiner
             query_candidates = state.get("refined_queries", [])
-            print(f"\n🔄 RETRY MODE (Round {retry_count}) - Tool Calling with {len(query_candidates)} refined queries")
+            logger.info(f"\n🔄 RETRY MODE (Round {retry_count}) - Tool Calling with {len(query_candidates)} refined queries")
             
             # Extract retrieval hints from refined queries (Query Refiner's hints)
             retrieval_hints = [
@@ -88,7 +99,7 @@ class ToolCallingRetrievalRouter:
                 if isinstance(rq, dict) and rq.get("retrieval_hint")
             ]
             if retrieval_hints:
-                print(f"   Using {len(retrieval_hints)} retrieval hints from Query Refiner")
+                logger.info(f"   Using {len(retrieval_hints)} retrieval hints from Query Refiner")
         else:
             # Initial mode: use query candidates from Query Planner
             query_candidates = state.get("query_candidates", [])
@@ -147,14 +158,15 @@ class ToolCallingRetrievalRouter:
         while iteration < self.max_tool_iterations:
             iteration += 1
             
-            print(f"\n  🔄 Tool Calling Iteration #{iteration}")
+            logger.info(f"\n  🔄 Tool Calling Iteration #{iteration}")
             
             response = self.client.chat.completions.create(
                 model=self.config.azure_deployment_name,
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                temperature=self.config.agent_temperature
+                temperature=self.config.agent_temperature,
+                max_tokens=1000  # Limit output for tool calling decisions
             )
             
             assistant_message = response.choices[0].message
@@ -162,13 +174,13 @@ class ToolCallingRetrievalRouter:
             
             # Check if LLM wants to call tools
             if assistant_message.tool_calls:
-                print(f"     LLM requested {len(assistant_message.tool_calls)} tool call(s)")
+                logger.info(f"     LLM requested {len(assistant_message.tool_calls)} tool call(s)")
                 
                 for tool_call in assistant_message.tool_calls:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
                     
-                    print(f"     → Calling: {function_name}({', '.join(f'{k}={v}' for k, v in list(function_args.items())[:2])}...)")
+                    logger.info(f"     → Calling: {function_name}({', '.join(f'{k}={v}' for k, v in list(function_args.items())[:2])}...)")
                     
                     # Execute tool
                     result = self._execute_tool(function_name, function_args, tool_results)
@@ -183,7 +195,7 @@ class ToolCallingRetrievalRouter:
                     }
                     execution_log.append(step_log)
                     
-                    print(f"       ✓ Returned {result.get('chunks_found', 0)} chunks (ID: {result.get('result_id', 'N/A')})")
+                    logger.info(f"       ✓ Returned {result.get('chunks_found', 0)} chunks (ID: {result.get('result_id', 'N/A')})")
                     
                     # Add tool result to conversation
                     messages.append({
@@ -194,9 +206,9 @@ class ToolCallingRetrievalRouter:
             else:
                 # LLM finished tool calling
                 if assistant_message.content:
-                    print(f"     ✅ LLM finished: {assistant_message.content[:100]}...")
+                    logger.info(f"     ✅ LLM finished: {assistant_message.content[:100]}...")
                 else:
-                    print(f"     ✅ LLM finished tool calling")
+                    logger.info(f"     ✅ LLM finished tool calling")
                 break
         
         # Aggregate all results
@@ -208,7 +220,7 @@ class ToolCallingRetrievalRouter:
         if len(aggregated_results) > max_for_layer3:
             original_count = len(aggregated_results)
             aggregated_results = aggregated_results[:max_for_layer3]
-            print(f"\n📊 Layer 2: Truncated {original_count} → {len(aggregated_results)} chunks for Layer 3")
+            logger.info(f"\n📊 Layer 2: Truncated {original_count} → {len(aggregated_results)} chunks for Layer 3")
         
         # RETRY MODE: Merge chunks if retry_count > 0
         retry_count = state.get("retry_count", 0)
@@ -216,30 +228,30 @@ class ToolCallingRetrievalRouter:
         missing_aspects = state.get("missing_aspects", [])
         
         if retry_count > 0 and keep_chunks:
-            print(f"\n🔀 Merging chunks (Tool Calling Mode - Round {retry_count}):")
-            print(f"   - Keep chunks (adaptive): {len(keep_chunks)}")
-            print(f"   - New chunks: {len(aggregated_results)}")
-            print(f"   - Missing aspects: {len(missing_aspects)}")
+            logger.info(f"\n🔀 Merging chunks (Tool Calling Mode - Round {retry_count}):")
+            logger.info(f"   - Keep chunks (adaptive): {len(keep_chunks)}")
+            logger.info(f"   - New chunks: {len(aggregated_results)}")
+            logger.info(f"   - Missing aspects: {len(missing_aspects)}")
             
             # Call merge_chunks_in_retry tool
-            # 返回 15-20 merged chunks，然后传给 Evidence Judge 的 Layer 3 rerank
+            # Return 15-20 merged chunks, then pass to Evidence Judge Layer 3 rerank
             merged_results, merge_stats = self.tools.merge_chunks_in_retry(
                 keep_chunks=keep_chunks,
                 new_chunks=aggregated_results,
                 missing_aspects=missing_aspects,
                 quality_threshold=0.75,
-                top_k=20  # 返回最多 20 chunks，Evidence Judge 会 rerank 到 top 10
+                top_k=20  # Return max 20 chunks, Evidence Judge will rerank to top 10
             )
             
             final_results = merged_results
             
-            print(f"\n✅ Merge complete (Adaptive Selection):")
-            print(f"   - Final chunks for Evidence Judge: {len(final_results)}")
-            print(f"   - Kept from old (adaptive): {merge_stats.get('kept_old_chunks', 0)}")
-            print(f"   - Added from new: {merge_stats.get('added_new_chunks', 0)}")
-            print(f"   - Removed duplicates: {merge_stats.get('duplicates_removed', 0)}")
-            print(f"   - Boosted for missing aspects: {merge_stats.get('boosted_chunks', 0)}")
-            print(f"   → Evidence Judge will rerank to top 10")
+            logger.info(f"\n✅ Merge complete (Adaptive Selection):")
+            logger.info(f"   - Final chunks for Evidence Judge: {len(final_results)}")
+            logger.info(f"   - Kept from old (adaptive): {merge_stats.get('kept_old_chunks', 0)}")
+            logger.info(f"   - Added from new: {merge_stats.get('added_new_chunks', 0)}")
+            logger.info(f"   - Removed duplicates: {merge_stats.get('duplicates_removed', 0)}")
+            logger.info(f"   - Boosted for missing aspects: {merge_stats.get('boosted_chunks', 0)}")
+            logger.info(f"   → Evidence Judge will rerank to top 10")
             
             # Update metadata with merge info
             metadata.update(merge_stats)
@@ -278,7 +290,7 @@ class ToolCallingRetrievalRouter:
     
     def _build_tool_definitions(self) -> List[Dict[str, Any]]:
         """
-        构建OpenAI function calling的工具定义
+        Build OpenAI function calling tool definitions
         
         Returns:
             List of tool definitions for OpenAI API
@@ -449,7 +461,7 @@ class ToolCallingRetrievalRouter:
     
     def _execute_tool(self, function_name: str, args: Dict[str, Any], tool_results: Dict) -> Dict:
         """
-        执行LLM调用的工具
+        Execute tool called by LLM
         
         Args:
             function_name: Tool name (e.g., "range_routing", "bm25_search")
@@ -692,7 +704,7 @@ class ToolCallingRetrievalRouter:
     
     def _aggregate_tool_results(self, tool_results: Dict, state: AgenticRAGState) -> tuple:
         """
-        汇总所有工具调用的结果
+        Aggregate all tool call results
         
         Args:
             tool_results: All tool call results
@@ -749,7 +761,7 @@ class ToolCallingRetrievalRouter:
         rrf_k: int = 60
     ) -> List[RetrievalResult]:
         """
-        使用RRF融合多个检索结果
+        Fuse multiple retrieval results using RRF
         
         Args:
             results: All retrieval results

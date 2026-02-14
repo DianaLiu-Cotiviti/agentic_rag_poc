@@ -1,19 +1,19 @@
 """
-Retrieval Router Agent - 统一的检索路由入口
+Retrieval Router Agent - Unified retrieval routing entry point
 
-提供三种模式：
-1. Direct Mode - 固定pipeline，0次LLM调用（最快，最便宜）
-2. Tool Calling Mode - LLM驱动工具调用，5-15次LLM调用（最智能）
-3. Planning Mode - LLM生成计划，Agent执行，1次LLM调用（平衡）
+Provides three modes:
+1. Direct Mode - Fixed pipeline, 0 LLM calls (fastest, cheapest)
+2. Tool Calling Mode - LLM-driven tool calling, 5-15 LLM calls (most intelligent)
+3. Planning Mode - LLM generates plan, Agent executes, 1 LLM call (balanced)
 
-使用方法：
-    # Direct模式（生产环境，速度优先）
+Usage:
+    # Direct mode (production, speed priority)
     router = RetrievalRouterAgent(config, tools, mode="direct")
     
-    # Planning模式（标准场景，平衡）
+    # Planning mode (standard scenario, balanced)
     router = RetrievalRouterAgent(config, tools, mode="planning")
     
-    # Tool Calling模式（研究环境，质量优先）
+    # Tool Calling mode (research environment, quality priority)
     router = RetrievalRouterAgent(config, tools, mode="tool_calling")
 """
 
@@ -26,31 +26,31 @@ from .retrieval_router_planning import PlanningRetrievalRouter
 
 class RetrievalRouterAgent(BaseAgent):
     """
-    Retrieval Router Agent - 统一的检索路由入口
+    Retrieval Router Agent - Unified retrieval routing entry point
     
-    职责：
-    1. 根据mode选择对应的实现（Direct/ToolCalling/Planning）
-    2. 委托给具体实现执行检索
+    Responsibilities:
+    1. Select corresponding implementation based on mode (Direct/ToolCalling/Planning)
+    2. Delegate retrieval execution to specific implementation
     
-    三种模式对比：
+    Comparison of Three Modes:
     
-    ┌──────────────┬──────────┬─────────┬────────┬──────────┬──────────┐
-    │ 模式         │ LLM调用  │ 执行时间│  成本  │ 智能程度 │ 适用场景 │
-    ├──────────────┼──────────┼─────────┼────────┼──────────┼──────────┤
-    │ direct       │   0次    │ ~0.5秒  │   $0   │    ⚡    │ 生产环境 │
-    │ planning     │   1次    │  ~2秒   │ $0.01  │  🤖🤖    │ 标准场景 │
-    │ tool_calling │  5-15次  │ ~10秒   │ $0.05+ │ 🤖🤖🤖   │ 研究环境 │
-    └──────────────┴──────────┴─────────┴────────┴──────────┴──────────┘
+    ┌──────────────┬──────────┬──────────┬────────┬──────────────┬─────────────┐
+    │ Mode         │ LLM Calls│ Exec Time│  Cost  │ Intelligence │ Use Case    │
+    ├──────────────┼──────────┼──────────┼────────┼──────────────┼─────────────┤
+    │ direct       │   0      │ ~0.5s    │   $0   │    ⚡        │ Production  │
+    │ planning     │   1      │  ~2s     │ $0.01  │  🤖🤖        │ Standard    │
+    │ tool_calling │  5-15    │ ~10s     │ $0.05+ │ 🤖🤖🤖       │ Research    │
+    └──────────────┴──────────┴──────────┴────────┴──────────────┴─────────────┘
     
-    实现细节：
-    - direct: 见 retrieval_router_direct.py
-    - tool_calling: 见 retrieval_router_tool_calling.py  
-    - planning: 见 retrieval_router_planning.py
+    Implementation Details:
+    - direct: See retrieval_router_direct.py
+    - tool_calling: See retrieval_router_tool_calling.py  
+    - planning: See retrieval_router_planning.py
     """
     
     def __init__(self, config, tools=None, mode="direct"):
         """
-        初始化检索路由器
+        Initialize retrieval router
         
         Args:
             config: Configuration object
@@ -61,7 +61,7 @@ class RetrievalRouterAgent(BaseAgent):
         self.tools = tools
         self.mode = mode
         
-        # 根据模式初始化对应的实现
+        # Initialize corresponding implementation based on mode
         if mode == "direct":
             self.router = DirectRetrievalRouter(config, tools)
         elif mode == "tool_calling":
@@ -76,7 +76,7 @@ class RetrievalRouterAgent(BaseAgent):
     
     def process(self, state: AgenticRAGState) -> dict:
         """
-        执行检索（委托给具体实现）
+        Execute retrieval (delegate to specific implementation)
         
         Args:
             state: Contains retrieval_strategies, query_candidates, question_keywords

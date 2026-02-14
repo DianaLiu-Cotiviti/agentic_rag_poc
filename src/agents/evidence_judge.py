@@ -1,13 +1,22 @@
 """
-Evidence Judge Agent - 证据评判官
+Evidence Judge Agent
 
-负责评估检索到的证据质量，判断：
-1. 证据是否充分回答问题 (is_sufficient)
-2. 证据覆盖度 (coverage_score)
-3. 证据相关性和准确性 (specificity_score)
-4. 是否存在矛盾信息 (has_contradiction)
-5. 缺失的方面 (missing_aspects)
+Responsible for evaluating the quality of retrieved evidence, determining:
+1. Whether evidence sufficiently answers the question (is_sufficient)
+2. Evidence coverage (coverage_score)
+3. Evidence relevance and accuracy (specificity_score)
+4. Whether contradictory information exists (has_contradiction)
+5. Missing aspects (missing_aspects)
 """
+
+import logging
+import sys
+logger = logging.getLogger("agenticrag.evidence_judge")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 from typing import List
 from pydantic import BaseModel, Field
@@ -23,15 +32,15 @@ from ..utils.save_workflow_outputs import save_top10_chunks
 
 class EvidenceJudgment(BaseModel):
     """
-    Evidence Judge的评估结果
+    Evidence Judge Evaluation Result
     
-    判断标准：
-    - is_sufficient: 证据是否足够回答问题（综合考虑数量、质量、覆盖度）
-    - coverage_score: 证据对问题各方面的覆盖程度（0.0-1.0）
-    - specificity_score: 证据的特定性和准确性（0.0-1.0）
-    - has_contradiction: 检索结果中是否存在矛盾信息
-    - missing_aspects: 问题中未被覆盖的方面（用于指导重试）
-    - reasoning: 评估推理过程（解释为什么sufficient/insufficient）
+    Judgment Criteria:
+    - is_sufficient: Whether evidence is sufficient to answer the question (considering quantity, quality, coverage)
+    - coverage_score: Evidence coverage of different aspects of the question (0.0-1.0)
+    - specificity_score: Evidence specificity and accuracy (0.0-1.0)
+    - has_contradiction: Whether contradictory information exists in retrieval results
+    - missing_aspects: Aspects of the question not covered (to guide retry)
+    - reasoning: Evaluation reasoning process (explaining why sufficient/insufficient)
     """
     is_sufficient: bool = Field(
         description="Whether the evidence is sufficient to answer the question"
@@ -60,25 +69,25 @@ class EvidenceJudgment(BaseModel):
 
 class EvidenceJudgeAgent(BaseAgent):
     """
-    Evidence Judge Agent - 评估检索证据质量
+    Evidence Judge Agent - Evaluate retrieval evidence quality
     
-    核心职责：
-    1. 判断证据是否充分 (is_sufficient)
-       - 考虑问题类型（简单CPT lookup vs 复杂billing规则）
-       - 考虑证据数量和质量
-       - 考虑覆盖度
+    Core Responsibilities:
+    1. Determine if evidence is sufficient (is_sufficient)
+       - Consider question type (simple CPT lookup vs complex billing rules)
+       - Consider evidence quantity and quality
+       - Consider coverage
     
-    2. 评估证据质量指标：
-       - coverage_score: 覆盖问题的多个方面（CPT code定义、modifier、bundling等）
-       - specificity_score: 证据的准确性和相关性
+    2. Evaluate evidence quality metrics:
+       - coverage_score: Coverage of multiple aspects of the question (CPT code definition, modifier, bundling, etc.)
+       - specificity_score: Evidence accuracy and relevance
     
-    3. 识别问题：
-       - has_contradiction: 检测矛盾信息
-       - missing_aspects: 识别缺失的方面
+    3. Identify issues:
+       - has_contradiction: Detect contradictory information
+       - missing_aspects: Identify missing aspects
     
-    4. 指导下一步行动：
-       - 如果insufficient，missing_aspects指导query refinement
-       - 如果sufficient，高质量chunks用于answer generation
+    4. Guide next actions:
+       - If insufficient, missing_aspects guides query refinement
+       - If sufficient, high-quality chunks used for answer generation
     """
     
     def __init__(self, config, client=None):
@@ -108,7 +117,7 @@ class EvidenceJudgeAgent(BaseAgent):
     
     def process(self, state: AgenticRAGState) -> dict:
         """
-        评估检索证据质量
+        Evaluate retrieval evidence quality
         
         Args:
             state: Contains question, question_type, retrieved_chunks, cpt_descriptions
@@ -122,7 +131,7 @@ class EvidenceJudgeAgent(BaseAgent):
         retrieval_metadata = state.get("retrieval_metadata", {})
         cpt_descriptions = state.get("cpt_descriptions", {})  # Get CPT descriptions from state
         
-        # 如果没有检索到内容 - 明确insufficient
+        # If no chunks retrieved - clearly insufficient
         if not chunks:
             return {
                 "evidence_assessment": {
@@ -138,9 +147,9 @@ class EvidenceJudgeAgent(BaseAgent):
         # Apply cross-encoder reranking if enabled
         reranked_chunks = chunks  # Keep original for comparison
         if self.config.use_cross_encoder_rerank and len(chunks) > self.config.cross_encoder_top_k:
-            print(f"\n🔄 Layer 3 Reranking: Cross-Encoder (Question-aware)")
-            print(f"   Purpose: Refine {len(chunks)} chunks to top {self.config.cross_encoder_top_k} based on original question")
-            print(f"   Before: {len(chunks)} chunks (from Layer 1-2 fusion)")
+            logger.info(f"\n🔄 Layer 3 Reranking: Cross-Encoder (Question-aware)")
+            logger.info(f"   Purpose: Refine {len(chunks)} chunks to top {self.config.cross_encoder_top_k} based on original question")
+            logger.info(f"   Before: {len(chunks)} chunks (from Layer 1-2 fusion)")
             
             # Call cross-encoder reranking tool
             reranked_chunks = self.retrieval_tools.cross_encoder_rerank(
@@ -149,7 +158,7 @@ class EvidenceJudgeAgent(BaseAgent):
                 top_k=self.config.cross_encoder_top_k
             )
             
-            print(f"   After: {len(reranked_chunks)} chunks (optimized for Evidence Judge)")
+            logger.info(f"   After: {len(reranked_chunks)} chunks (optimized for Evidence Judge)")
             
             # Update metadata
             retrieval_metadata["cross_encoder_reranked"] = True
@@ -157,7 +166,7 @@ class EvidenceJudgeAgent(BaseAgent):
             retrieval_metadata["chunks_before_layer3"] = len(chunks)
             retrieval_metadata["chunks_after_layer3"] = len(reranked_chunks)
             
-            # 保存top 10 chunks作为LLM回答的依据
+            # Save top 10 chunks as basis for LLM response
             mode = retrieval_metadata.get('mode', 'unknown')
             save_path = save_top10_chunks(
                 top10_chunks=reranked_chunks,
@@ -170,25 +179,25 @@ class EvidenceJudgeAgent(BaseAgent):
                     'layer': 'layer3_cross_encoder'
                 }
             )
-            print(f"   💾 Top 10 chunks saved to: {save_path}")
+            logger.info(f"   💾 Top 10 chunks saved to: {save_path}")
         else:
             # Cross-encoder disabled or not enough chunks - use score-based top-K
             if not self.config.use_cross_encoder_rerank:
-                print(f"\n⏭️  Layer 3 Reranking: Skipped (disabled in config)")
+                logger.info(f"\n⏭️  Layer 3 Reranking: Skipped (disabled in config)")
             else:
-                print(f"\n⏭️  Layer 3 Reranking: Skipped (only {len(chunks)} chunks, threshold is {self.config.cross_encoder_top_k})")
+                logger.info(f"\n⏭️  Layer 3 Reranking: Skipped (only {len(chunks)} chunks, threshold is {self.config.cross_encoder_top_k})")
             
             # Still limit to top-K based on existing scores (from Layer 1-2)
             if len(chunks) > self.config.cross_encoder_top_k:
                 reranked_chunks = chunks[:self.config.cross_encoder_top_k]
-                print(f"   📊 Using top {self.config.cross_encoder_top_k} chunks based on Layer 1-2 scores")
+                logger.info(f"   📊 Using top {self.config.cross_encoder_top_k} chunks based on Layer 1-2 scores")
                 retrieval_metadata["cross_encoder_reranked"] = False
                 retrieval_metadata["truncated_to_top_k"] = True
             else:
-                print(f"   📊 Using all {len(chunks)} chunks (no truncation needed)")
+                logger.info(f"   📊 Using all {len(chunks)} chunks (no truncation needed)")
                 retrieval_metadata["cross_encoder_reranked"] = False
             
-            # 保存top 10 chunks作为LLM回答的依据 (score-based版本)
+            # Save top 10 chunks as basis for LLM response (score-based version)
             mode = retrieval_metadata.get('mode', 'unknown')
             save_path = save_top10_chunks(
                 top10_chunks=reranked_chunks,
@@ -201,7 +210,7 @@ class EvidenceJudgeAgent(BaseAgent):
                     'layer': 'layer1_layer2_score_based'
                 }
             )
-            print(f"   💾 Top {len(reranked_chunks)} chunks saved to: {save_path}")
+            logger.info(f"   💾 Top {len(reranked_chunks)} chunks saved to: {save_path}")
 
         
         # Use reranked chunks for evaluation
@@ -210,9 +219,9 @@ class EvidenceJudgeAgent(BaseAgent):
         # Format chunks for prompt
         chunks_text = format_chunks_for_judge(chunks_to_judge, cpt_descriptions=cpt_descriptions)
         
-        # 构建prompt用于LLM评估
-        # 注意：只用 original question 和 retrieved chunks 评估
-        # 不需要 sub-queries（它们只是检索手段，不是评估目标）
+        # Build prompt for LLM evaluation
+        # Note: Only use original question and retrieved chunks for evaluation
+        # Sub-queries are not needed (they are just retrieval means, not evaluation targets)
         prompt = build_evidence_judgment_prompt(
             question=question,
             question_type=question_type,
@@ -222,7 +231,7 @@ class EvidenceJudgeAgent(BaseAgent):
             total_chunks=len(chunks_to_judge)
         )
         
-        # 调用LLM进行结构化评估
+        # Call LLM for structured evaluation
         response = self.client.beta.chat.completions.parse(
             model=self.config.azure_deployment_name,
             messages=[
@@ -230,7 +239,8 @@ class EvidenceJudgeAgent(BaseAgent):
                 {"role": "user", "content": prompt}
             ],
             response_format=EvidenceJudgment,
-            temperature=self.config.agent_temperature
+            temperature=self.config.agent_temperature,
+            max_tokens=2500  # Increased for detailed evidence assessment
         )
         
         judgment = response.choices[0].message.parsed
@@ -248,6 +258,5 @@ class EvidenceJudgeAgent(BaseAgent):
             "retrieved_chunks": reranked_chunks,  # Update state with top-10 reranked chunks
             "retrieval_metadata": retrieval_metadata  # Update metadata with Layer 3 info
         }
-    
-    
-    
+
+

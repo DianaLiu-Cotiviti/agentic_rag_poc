@@ -118,7 +118,8 @@ class QueryPlannerAgent(BaseAgent):
                 {"role": "user", "content": prompt}
             ],
             response_format=QueryPlannerDecision,
-            temperature=self.config.agent_temperature
+            temperature=self.config.agent_temperature,
+            max_tokens=1500  # Limit query planning output
         )
         
         decision = response.choices[0].message.parsed

@@ -1,11 +1,11 @@
 """
-Direct Retrieval Router - 固定Pipeline执行
+Direct Retrieval Router - Fixed Pipeline Execution
 
-特点：
-- 0次LLM调用
-- 最快（~0.5秒）
-- 最便宜（$0）
-- 直接调用 multi_query_hybrid_search（无需重复实现）
+Features:
+- 0 LLM calls
+- Fastest (~0.5 seconds)
+- Cheapest ($0)
+- Directly calls multi_query_hybrid_search (no need for duplicate implementation)
 """
 
 from typing import List, Dict, Any
@@ -14,15 +14,15 @@ from ..state import AgenticRAGState, RetrievalResult, QueryCandidate
 
 class DirectRetrievalRouter:
     """
-    Direct模式 - 固定Pipeline
+    Direct Mode - Fixed Pipeline
     
-    执行流程：
-    1. 从 keywords 提取 CPT codes
-    2. 直接调用 tools.multi_query_hybrid_search()
-       - 内部自动处理: Range routing → Hybrid search → RRF fusion
-    3. 返回结果
+    Execution Flow:
+    1. Extract CPT codes from keywords
+    2. Directly call tools.multi_query_hybrid_search()
+       - Automatically handles internally: Range routing → Hybrid search → RRF fusion
+    3. Return results
     
-    Note: 不需要手动实现 pipeline，直接使用 RetrievalTools.multi_query_hybrid_search
+    Note: No need to manually implement pipeline, directly use RetrievalTools.multi_query_hybrid_search
     """
     
     def __init__(self, config, tools):
@@ -36,11 +36,11 @@ class DirectRetrievalRouter:
     
     def process(self, state: AgenticRAGState) -> dict:
         """
-        直接执行检索（无LLM参与）
+        Execute retrieval directly (no LLM involvement)
         
-        直接调用 multi_query_hybrid_search，避免重复实现相同逻辑
+        Directly call multi_query_hybrid_search to avoid duplicate implementation of same logic
         
-        Note: Direct mode 不支持 retry（总是直接生成答案）
+        Note: Direct mode does not support retry (always generates answer directly)
         
         Args:
             state: Contains query_candidates, question_keywords

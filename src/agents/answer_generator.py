@@ -1,19 +1,18 @@
-"""
-Answer Generator Agent - 答案生成器
+""" Answer Generator Agent
 
-基于 Evidence Judge 判定为 sufficient 的 top 10 chunks 生成最终答案。
+Generates final answers based on top 10 chunks judged as sufficient by Evidence Judge.
 
-核心职责:
-1. 接收 original question + top 10 high-quality chunks
-2. 生成结构化的、有证据支持的答案
-3. 引用具体的 chunk 来源
-4. 确保答案准确、完整、可追溯
+Core Responsibilities:
+1. Receive original question + top 10 high-quality chunks
+2. Generate structured, evidence-supported answers
+3. Cite specific chunk sources
+4. Ensure answers are accurate, complete, and traceable
 
-设计原则:
-- 答案必须基于提供的 chunks（不能幻觉）
-- 必须引用具体的 chunk（可追溯性）
-- 如果证据不足某些方面，明确说明（limitations）
-- 代码简洁：prompts 在 prompts/，formatting 在 utils/
+Design Principles:
+- Answers must be based on provided chunks (no hallucination)
+- Must cite specific chunks (traceability)
+- If evidence is insufficient for certain aspects, state clearly (limitations)
+- Code simplicity: prompts in prompts/, formatting in utils/
 """
 
 from typing import Dict, Any
@@ -27,7 +26,8 @@ from ..prompts.answer_generator_prompts import (
 )
 from ..utils.chunk_formatting import (
     format_chunks_with_ids,
-    format_cpt_descriptions
+    format_cpt_descriptions,
+    get_chunk_text_by_id
 )
 
 
@@ -39,18 +39,18 @@ class Citation(BaseModel):
 
 class CitedAnswer(BaseModel):
     """
-    Answer Generator 的输出结构
+    Output structure of Answer Generator
     
-    包含答案文本和证据引用（使用数字引用格式 [1] [2] [3]）
+    Contains answer text and evidence citations (using numbered citation format [1] [2] [3])
     
-    注意：citation_map 不在此模型中，会在process()中自动生成
+    Note: citation_map is not in this model, it will be auto-generated in process()
     """
     answer: str = Field(
         description="Comprehensive answer with inline numbered citations [1] [2] [3]. MUST include citations after each claim."
     )
     key_points: List[str] = Field(
         default_factory=list,
-        description="Key points with numbered citations [1] [2], e.g., 'Modifier 59 allowed [2] [3]'"
+        description="3-5 high-level summary bullet points (NOT sentence extraction, but executive summary of main takeaways). Each with citations [1] [2]."
     )
     citations: List[Citation] = Field(
         default_factory=list,
@@ -69,17 +69,17 @@ class CitedAnswer(BaseModel):
 
 class AnswerGeneratorAgent(BaseAgent):
     """
-    Answer Generator Agent - 生成最终答案
+    Answer Generator Agent - Generate Final Answer
     
-    工作流程:
-    1. 接收 original question 和 top 10 chunks（已被 Evidence Judge 验证为 sufficient）
-    2. 使用 prompts/answer_generator_prompts.py 中的 prompt
-    3. 返回结构化答案（包含 citations, key_points, confidence）
+    Workflow:
+    1. Receive original question and top 10 chunks (verified as sufficient by Evidence Judge)
+    2. Use prompt from prompts/answer_generator_prompts.py
+    3. Return structured answer (containing citations, key_points, confidence)
     
-    Token 优化策略:
-    - 只接收已验证为 sufficient 的 top 10 chunks（通过 conditional edge）
-    - 不重复展示 evidence_assessment（已在 Evidence Judge 完成）
-    - CPT descriptions 单独格式化，避免冗余
+    Token Optimization Strategy:
+    - Only receive top 10 chunks verified as sufficient (via conditional edge)
+    - Don't repeat evidence_assessment display (already done in Evidence Judge)
+    - CPT descriptions formatted separately to avoid redundancy
     """
     
     def __init__(self, config, client=None):
@@ -105,10 +105,10 @@ class AnswerGeneratorAgent(BaseAgent):
     
     def process(self, state: AgenticRAGState) -> dict:
         """
-        生成基于证据的答案
+        Generate evidence-based answer
         
-        注意: 此方法只在 evidence is_sufficient=True 时被调用（通过 conditional edge）
-        因此无需再检查 evidence_assessment 的质量分数
+        Note: This method is only called when evidence is_sufficient=True (via conditional edge)
+        Therefore no need to check evidence_assessment quality score again
         
         Args:
             state: Contains question, retrieved_chunks (top 10), cpt_descriptions
@@ -116,79 +116,87 @@ class AnswerGeneratorAgent(BaseAgent):
         Returns:
             dict: Contains final_answer
         """
+        import logging
+        logger = logging.getLogger("agenticrag.workflow_simple")
+        logger.info("\nStart generating answer...")
         question = state["question"]
         chunks = state.get("retrieved_chunks", [])
         cpt_descriptions = state.get("cpt_descriptions", {})
-        
-        # 安全检查：确保有 chunks
+        logger.info(f"Question: {question}")
+        logger.info(f"Retrieved chunks: {len(chunks)}")
+
+        # Check if chunks were retrieved
         if not chunks:
+            logger.info("No chunks found, cannot generate answer.")
             return {
                 "final_answer": {
-                    "answer": "无法生成答案：没有检索到相关证据。",
+                    "answer": "Unable to generate answer: No relevant evidence retrieved.",
                     "key_points": [],
                     "citations": [],
                     "confidence": 0.0,
-                    "limitations": ["未检索到任何相关文档"]
+                    "limitations": ["No relevant documents retrieved"]
                 }
             }
-        
-        # 使用 utils 格式化 chunks 和 CPT descriptions
+
+        # Format chunks and CPT descriptions
         chunks_text = format_chunks_with_ids(chunks)
         cpt_desc_text = format_cpt_descriptions(cpt_descriptions)
-        
-        # 使用 prompts/ 中的 prompt builder
+
+        # Build prompt
         prompt = build_answer_generation_prompt(
             question=question,
             chunks_text=chunks_text,
             cpt_descriptions_text=cpt_desc_text
         )
-        
-        # 调用 LLM 生成结构化答案
-        response = self.client.beta.chat.completions.parse(
-            model=self.config.azure_deployment_name,
-            messages=[
-                {"role": "system", "content": ANSWER_GENERATOR_SYSTEM_MESSAGE},
-                {"role": "user", "content": prompt}
-            ],
-            response_format=CitedAnswer,
-            temperature=self.config.agent_temperature
-        )
-        
-        answer = response.choices[0].message.parsed
-        
-        # Generate citation_map from LLM's explicit Citation objects
-        # This ensures correct mapping between citation numbers and chunk IDs
-        citation_map = {
-            citation.number: citation.chunk_id 
-            for citation in answer.citations
-        }
-        
-        # ✅ VALIDATION: Verify citation mapping integrity
-        print(f"\n🔍 Citation Mapping Validation:")
-        print(f"   LLM returned {len(answer.citations)} citation objects")
-        
-        # Display each citation mapping for verification
-        for citation in sorted(answer.citations, key=lambda c: c.number):
-            print(f"   [{citation.number}] → {citation.chunk_id}")
-        
-        # Check for duplicate citation numbers
-        citation_numbers = [c.number for c in answer.citations]
-        if len(citation_numbers) != len(set(citation_numbers)):
-            duplicates = [n for n in citation_numbers if citation_numbers.count(n) > 1]
-            print(f"   ⚠️  WARNING: Duplicate citation numbers detected: {set(duplicates)}")
-        else:
-            print(f"   ✅ All citation numbers are unique")
-        
-        # Verify citation_map matches LLM output
-        print(f"   ✅ Generated citation_map with {len(citation_map)} entries")
-        
+
+        # Call LLM to generate answer
+        try:
+            response = self.client.beta.chat.completions.parse(
+                model=self.config.azure_deployment_name,
+                messages=[
+                    {"role": "system", "content": ANSWER_GENERATOR_SYSTEM_MESSAGE},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format=CitedAnswer,
+                temperature=self.config.agent_temperature,
+                max_tokens=8000  # Maximum for comprehensive final answers
+            )
+            answer = response.choices[0].message.parsed
+        except Exception as e:
+            logger.info(f"LLM call failed: {e}")
+            return {
+                "final_answer": {
+                    "answer": f"Answer generation failed: {e}",
+                    "key_points": [],
+                    "citations": [],
+                    "confidence": 0.0,
+                    "limitations": [str(e)]
+                }
+            }
+
+        # Build citation_map
+        citation_map = {}
+        for citation in answer.citations:
+            chunk_id = citation.chunk_id
+            chunk_text = get_chunk_text_by_id(chunks, chunk_id)
+            citation_map[citation.number] = {
+                'chunk_id': chunk_id,
+                'chunk_text': chunk_text
+            }
+
+        # Process limitations
+        limitations = answer.limitations
+        if limitations and all(isinstance(l, (int, float)) or (isinstance(l, str) and l.strip().isdigit()) for l in limitations):
+            limitations = ["LLM did not provide specific limitations."]
+
+        logger.info("Answer generation complete.")
         return {
             "final_answer": {
                 "answer": answer.answer,
                 "key_points": answer.key_points,
-                "citation_map": citation_map,  # Explicit mapping from LLM
+                "citation_map": citation_map,  # number -> {chunk_id, chunk_text}
                 "confidence": answer.confidence,
-                "limitations": answer.limitations
+                "limitations": limitations
             }
         }
 

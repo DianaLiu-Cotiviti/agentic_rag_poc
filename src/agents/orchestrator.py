@@ -107,7 +107,8 @@ class OrchestratorAgent(BaseAgent):
                 {"role": "user", "content": prompt}
             ],
             response_format=OrchestratorDecision,
-            temperature=self.config.agent_temperature
+            temperature=self.config.agent_temperature,
+            max_tokens=800  # Limit orchestrator decision output
         )
         
         decision = response.choices[0].message.parsed

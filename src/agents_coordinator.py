@@ -1,26 +1,26 @@
 """
-Agentic RAG Agents - 主入口
+Agentic RAG Agents - Main Entry Point
 ===========================
 
-这个文件作为所有Agent的协调器和入口点。
-具体的Agent实现都在 agents/ 目录下。
+This file serves as the coordinator and entry point for all Agents.
+Specific Agent implementations are in the agents/ directory.
 
-架构:
-- agents/base.py - 基类
-- agents/orchestrator.py - 决策Agent (question analysis + strategy hints)
-- agents/query_planner.py - 查询规划 (planning mode使用)
-- agents/retrieval_router.py - 检索路由 (三种模式)
-  - retrieval_router_direct.py - Direct模式 (0 LLM调用)
-  - retrieval_router_planning.py - Planning模式 (1 LLM调用)
-  - retrieval_router_tool_calling.py - Tool Calling模式 (5-15 LLM调用)
-- agents/evidence_judge.py - 证据评估 (新增LLM总结功能)
-- agents/query_refiner.py - 查询优化 (retry时使用)
-- agents/structured_extraction.py - 答案提取
+Architecture:
+- agents/base.py - Base class
+- agents/orchestrator.py - Decision Agent (question analysis + strategy hints)
+- agents/query_planner.py - Query planning (used in planning mode)
+- agents/retrieval_router.py - Retrieval routing (three modes)
+  - retrieval_router_direct.py - Direct mode (0 LLM calls)
+  - retrieval_router_planning.py - Planning mode (1 LLM call)
+  - retrieval_router_tool_calling.py - Tool Calling mode (5-15 LLM calls)
+- agents/evidence_judge.py - Evidence assessment (with new LLM summarization feature)
+- agents/query_refiner.py - Query optimization (used during retry)
+- agents/structured_extraction.py - Answer extraction
 
-关键设计决策:
-1. Retrieval Mode: 配置级别选择（prod/dev/research），不是per-query决策
-2. Orchestrator职责: Question analysis + Strategy hints（不选择mode）
-3. Client管理: 统一使用config.client（lazy initialization pattern）
+Key Design Decisions:
+1. Retrieval Mode: Configuration-level choice (prod/dev/research), not per-query decision
+2. Orchestrator Responsibility: Question analysis + Strategy hints (does not select mode)
+3. Client Management: Unified use of config.client (lazy initialization pattern)
 """
 
 from src.config import AgenticRAGConfig
@@ -38,43 +38,43 @@ from src.agents.answer_generator import AnswerGeneratorAgent
 
 class AgenticRAGAgents:
     """
-    Agentic RAG Agents 协调器
+    Agentic RAG Agents Coordinator
     
-    这个类负责:
-    1. 初始化所有Agent实例
-    2. 提供统一的node接口给Workflow调用
-    3. 管理Agent之间的配置共享
+    This class is responsible for:
+    1. Initializing all Agent instances
+    2. Providing unified node interfaces for Workflow invocation
+    3. Managing configuration sharing between Agents
     
-    用法:
+    Usage:
         config = AgenticRAGConfig.from_env()
         agents = AgenticRAGAgents(config)
         tools = RetrievalTools(config)
         
-        # 在workflow中使用
+        # Use in workflow
         result = agents.orchestrator_node(state)
     """
     
     def __init__(self, config: AgenticRAGConfig):
         """
-        初始化所有Agent
+        Initialize all Agents
         
         Args:
-            config: 配置对象
+            config: Configuration object
         """
         self.config = config
         
-        # 初始化各个Agent（使用config中的lazy client）
-        # 每个agent内部会从config.client获取共享的OpenAI client
+        # Initialize each Agent (using lazy client from config)
+        # Each agent internally gets the shared OpenAI client from config.client
         self.orchestrator = OrchestratorAgent(config)
         self.query_planner = QueryPlannerAgent(config)
         self.evidence_judge = EvidenceJudgeAgent(config)
         self.answer_generator = AnswerGeneratorAgent(config)  # NEW: Answer Generator
-        self.query_refiner = QueryRefinerAgent(config)  # NEW: Query Refiner for retry (统一使用 Azure OpenAI)
+        self.query_refiner = QueryRefinerAgent(config)  # NEW: Query Refiner for retry (unified use of Azure OpenAI)
         # self.structured_extraction = StructuredExtractionAgent(config)
         
-        # retrieval_router需要在workflow中传入tools和mode
+        # retrieval_router needs tools and mode passed in workflow
         self._retrieval_routers = {}  # Cache routers by mode
-        # 缓存不同mode的Agent实例
+        # Cache Agent instances for different modes
         # self._retrieval_routers = {
         #     "direct": RetrievalRouterAgent(config, tools, mode="direct"),
         #     "planning": RetrievalRouterAgent(config, tools, mode="planning"),
@@ -82,59 +82,59 @@ class AgenticRAGAgents:
         # }
     
     # ========== Node Functions ==========
-    # 这些函数作为LangGraph节点被workflow调用
+    # These functions are called by the workflow as LangGraph nodes
     
     def orchestrator_node(self, state: AgenticRAGState) -> dict:
         """
-        Orchestrator节点
+        Orchestrator node
         
-        职责:
+        Responsibilities:
         1. Question type classification (cpt_code_lookup, billing_compatibility, etc.)
-        2. Strategy hints (建议使用哪些retrieval strategies)
-        3. Max retry设置
+        2. Strategy hints (recommend which retrieval strategies to use)
+        3. Max retry settings
         
-        注意: 不选择retrieval mode（mode是配置级别的决策）
+        Note: Does not select retrieval mode (mode is a configuration-level decision)
         """
         return self.orchestrator.process(state)
     
     def query_planner_node(self, state: AgenticRAGState) -> dict:
         """
-        Query Planner节点
+        Query Planner node
         
-        生成多个查询候选（planning/tool_calling mode使用）
+        Generate multiple query candidates (used in planning/tool_calling mode)
         """
         return self.query_planner.process(state)
     
     def retrieval_router_node(self, state: AgenticRAGState, tools, mode: str = None) -> dict:
         """
-        Retrieval Router节点
+        Retrieval Router node
         
-        根据配置的mode执行检索（不是orchestrator选择）
+        Execute retrieval according to configured mode (not selected by orchestrator)
         
-        Mode选择优先级：
-        1. 参数mode（测试时可强制指定）
-        2. config.retrieval_mode（部署环境配置）
+        Mode selection priority:
+        1. Parameter mode (can be forcibly specified during testing)
+        2. config.retrieval_mode (deployment environment configuration)
            - prod: "direct" (0 LLM calls, fastest)
            - dev: "planning" (1 LLM call, balanced)
            - research: "tool_calling" (5-15 LLM calls, smartest)
         
-        Orchestrator的作用：
-        - 提供strategy hints（建议使用哪些retrieval strategies）
-        - 不同mode会参考这些hints：
-          * Direct mode: 严格执行hints
-          * Planning mode: 参考hints生成plan
-          * Tool Calling mode: hints作为system message指导
+        Role of Orchestrator:
+        - Provide strategy hints (recommend which retrieval strategies to use)
+        - Different modes reference these hints:
+          * Direct mode: Strictly execute hints
+          * Planning mode: Reference hints to generate plan
+          * Tool Calling mode: Hints as system message guidance
         
         Args:
-            state: 当前状态（包含orchestrator的strategy hints）
-            tools: RetrievalTools实例
-            mode: 可选，覆盖config中的默认mode
+            state: Current state (includes orchestrator's strategy hints)
+            tools: RetrievalTools instance
+            mode: Optional, overrides default mode in config
         """
-        # 确定使用的模式（优先级：参数 > config）
+        # Determine the mode to use (priority: parameter > config)
         if mode is None:
             mode = self.config.retrieval_mode
         
-        # 延迟初始化retrieval_router（每个mode缓存一个实例）
+        # Lazy initialization of retrieval_router (cache one instance per mode)
         if mode not in self._retrieval_routers:
             self._retrieval_routers[mode] = RetrievalRouterAgent(
                 self.config, 
@@ -142,39 +142,39 @@ class AgenticRAGAgents:
                 mode=mode
             )
         
-        # 检索结果 (chunks)，或者复用Agent instance时，新的检索结果
+        # Retrieval results (chunks), or when reusing Agent instance, new retrieval results
         result = self._retrieval_routers[mode].process(state)
         return result
 
     def evidence_judge_node(self, state: AgenticRAGState) -> dict:
         """
-        Evidence Judge节点
+        Evidence Judge node
         
-        评估检索证据的充分性（使用三层chunk formatting + LLM总结）
+        Evaluate the sufficiency of retrieved evidence (using three-tier chunk formatting + LLM summarization)
         """
         return self.evidence_judge.process(state)
     
     def answer_generator_node(self, state: AgenticRAGState) -> dict:
         """
-        Answer Generator节点
+        Answer Generator node
         
-        基于 sufficient evidence (top 10 chunks) 生成最终答案
+        Generate final answer based on sufficient evidence (top 10 chunks)
         """
         return self.answer_generator.process(state)
     
     def query_refiner_node(self, state: AgenticRAGState) -> dict:
         """
-        Query Refiner节点
+        Query Refiner node
         
-        优化查询以填补证据缺失（retry时使用）
+        Optimize queries to fill evidence gaps (used during retry)
         Generate refined queries and select keep_chunks
         """
         return self.query_refiner.process(state)
     
     # def structured_extraction_node(self, state: AgenticRAGState) -> dict:
     #     """
-    #     Structured Extraction节点
+    #     Structured Extraction node
         
-    #     从证据中提取结构化答案
+    #     Extract structured answers from evidence
     #     """
     #     return self.structured_extraction.process(state)

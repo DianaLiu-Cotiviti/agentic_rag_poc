@@ -1,6 +1,6 @@
 """
-Base Agent class - 所有Agent的基类
-提供共享的功能和接口
+Base Agent class
+Provides shared functionality and interfaces
 """
 
 from abc import ABC, abstractmethod
@@ -11,12 +11,12 @@ from ..state import AgenticRAGState
 
 class BaseAgent(ABC):
     """
-    Agent基类
+    Base Agent class
     
-    所有Agent都继承这个基类，获得：
-    1. 共享的LLM客户端 (通过config.client)
-    2. 配置访问
-    3. 标准化的接口
+    All agents inherit this class to get:
+    1. Shared LLM client (via config.client)
+    2. Configuration access
+    3. Standardized interface
     """
     
     def __init__(self, config: AgenticRAGConfig):
@@ -25,33 +25,33 @@ class BaseAgent(ABC):
     @property
     def client(self) -> AzureOpenAI:
         """
-        返回共享的LLM客户端
+        Return shared LLM client
         
-        所有agents共享config.client，避免创建多个连接
+        All agents share config.client to avoid creating multiple connections
         """
         return self.config.client
     
     @abstractmethod
     def process(self, state: AgenticRAGState) -> dict:
         """
-        处理state并返回更新
+        Process state and return updates
         
-        每个Agent必须实现这个方法
+        Each Agent must implement this method
         
         Args:
-            state: 当前的RAG状态
+            state: Current RAG state
         
         Returns:
-            dict: 要更新到state中的内容
+            dict: Content to update into state
         """
         pass
     
     def __call__(self, state: AgenticRAGState) -> dict:
         """
-        让Agent可以像函数一样调用
+        Allows Agent to be called like a function
         
-        用法:
+        Usage:
             agent = OrchestratorAgent(config)
-            result = agent(state)  # 等同于 agent.process(state)
+            result = agent(state)  # Equivalent to agent.process(state)
         """
         return self.process(state)

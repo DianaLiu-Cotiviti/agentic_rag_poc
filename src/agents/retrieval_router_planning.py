@@ -1,12 +1,22 @@
-"""
-Planning Retrieval Router - LLM生成计划，Agent执行
+import logging
+import sys
+logger = logging.getLogger("agenticrag.retrieval_router_planning")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
-特点：
-- 1次LLM调用（生成plan）
-- Agent按照plan硬编码执行
-- 中等速度（~2秒）
-- 中等成本（$0.01）
-- LLM无法根据中间结果调整（plan已定）
+
+"""
+Planning Retrieval Router - LLM generates plan, Agent executes
+
+Characteristics:
+- 1 LLM call (generate plan)
+- Agent executes hardcoded plan
+- Medium speed (~2 seconds)
+- Medium cost ($0.01)
+- LLM cannot adjust based on intermediate results (plan is fixed)
 """
 
 from typing import List, Dict, Any
@@ -29,11 +39,11 @@ class PreFilteringConfig(BaseModel):
 class QueryStrategyMapping(BaseModel):
     """Maps a query candidate to its best retrieval strategy
     
-    每个query根据其特点选择最适合的strategy：
-    - hybrid: BM25+Semantic+RRF融合（适合复杂query）
-    - bm25: 纯关键词检索（适合CPT codes、精确匹配）
-    - semantic: 纯语义检索（适合概念性query）
-    - bm25_semantic: 先BM25再Semantic，两组结果都保留（适合需要双重验证的query）
+    Each query selects the most suitable strategy based on characteristics:
+    - hybrid: BM25+Semantic+RRF fusion (suitable for complex queries)
+    - bm25: Pure keyword search (suitable for CPT codes, exact matching)
+    - semantic: Pure semantic search (suitable for conceptual queries)
+    - bm25_semantic: BM25 then Semantic, keeping both result sets (suitable for queries requiring dual verification)
     """
     query_index: int = Field(description="Index in query_candidates list")
     strategy: str = Field(
@@ -54,23 +64,23 @@ class RetrievalParameters(BaseModel):
 class FusionParameters(BaseModel):
     """Result fusion configuration (for multi-query fusion only)"""
     boost_range_results: float = Field(
-        default=2.0,  # ← 提高默认值到2.0
-        ge=1.0,       # ← 最小1.0（不降分）
-        le=5.0,       # ← 提高最大值到5.0，允许更强的boost
+        default=2.0,  # ← Increase default to 2.0
+        ge=1.0,       # ← Minimum 1.0 (no score reduction)
+        le=5.0,       # ← Increase max to 5.0, allowing stronger boost
         description="Boost factor for range-routed chunks (higher = prioritize pre-filtered results more)"
     )
 
 
 class RetrievalRouterDecision(BaseModel):
-    """LLM生成的检索执行计划
+    """LLM-generated retrieval execution plan
     
-    每个query根据特点选择最适合的strategy（4种）：
-    1. hybrid: BM25+Semantic+RRF（tools层融合） - 适合复杂query
-    2. bm25: 纯关键词检索 - 适合CPT codes、精确匹配
-    3. semantic: 纯语义检索 - 适合概念性query
-    4. bm25_semantic: 先BM25再Semantic，保留两组结果 - 适合需要双重验证
+    Each query selects the most suitable strategy (4 types):
+    1. hybrid: BM25+Semantic+RRF (tools layer fusion) - suitable for complex queries
+    2. bm25: Pure keyword search - suitable for CPT codes, exact matching
+    3. semantic: Pure semantic search - suitable for conceptual queries
+    4. bm25_semantic: BM25 then Semantic, keeping both result sets - suitable for dual verification
     
-    所有query的结果最后用_aggregate_and_rank聚合排序
+    All query results are aggregated and ranked using _aggregate_and_rank
     """
     pre_filtering: PreFilteringConfig
     query_strategy_mapping: List[QueryStrategyMapping] = Field(
@@ -84,21 +94,21 @@ class RetrievalRouterDecision(BaseModel):
 
 class PlanningRetrievalRouter:
     """
-    Planning模式 - LLM生成计划，Agent执行
+    Planning Mode - LLM generates plan, Agent executes
     
-    执行流程：
-    1. LLM生成RetrievalRouterDecision（Pydantic schema）
-    2. Agent按照plan硬编码执行：
+    Execution Flow:
+    1. LLM generates RetrievalRouterDecision (Pydantic schema)
+    2. Agent executes hardcoded plan:
        - Pre-filtering (range routing)
-       - 每个query选择最适合的strategy (hybrid/bm25/semantic/bm25_semantic)
-       - 所有query的结果用_aggregate_and_rank聚合排序
-    3. 返回Top-K结果
+       - Each query selects most suitable strategy (hybrid/bm25/semantic/bm25_semantic)
+       - All query results aggregated and ranked using _aggregate_and_rank
+    3. Return Top-K results
     
-    设计原则：
-    - Tools层负责：单query检索 + hybrid内部融合(BM25+Semantic+RRF)
-    - Planning层负责：多query结果聚合 (所有strategies的结果一起排序)
-    - 每个query独立选择strategy，根据query特点（CPT code用bm25，复杂query用hybrid等）
-    - bm25_semantic: 一个query同时用BM25和Semantic，保留两组结果
+    Design Principles:
+    - Tools layer handles: single query retrieval + hybrid internal fusion (BM25+Semantic+RRF)
+    - Planning layer handles: multi-query result aggregation (all strategy results ranked together)
+    - Each query independently selects strategy based on characteristics (CPT codes use bm25, complex queries use hybrid, etc.)
+    - bm25_semantic: one query uses both BM25 and Semantic, keeping both result sets
     """
     
     def __init__(self, config, tools, client=None):
@@ -114,7 +124,7 @@ class PlanningRetrievalRouter:
     
     def process(self, state: AgenticRAGState) -> dict:
         """
-        LLM生成计划，Agent执行
+        LLM generates plan, Agent executes
         
         Supports retry mode: uses refined_queries when retry_count > 0
         
@@ -135,7 +145,7 @@ class PlanningRetrievalRouter:
         if retry_count > 0 and state.get("refined_queries"):
             # Retry mode: use refined queries from Query Refiner
             query_candidates = state.get("refined_queries", [])
-            print(f"\n🔄 RETRY MODE (Round {retry_count}) - Planning with {len(query_candidates)} refined queries")
+            logger.info(f"\n🔄 RETRY MODE (Round {retry_count}) - Planning with {len(query_candidates)} refined queries")
             
             # Extract retrieval hints from refined queries (Query Refiner's hints)
             retrieval_hints = [
@@ -144,7 +154,7 @@ class PlanningRetrievalRouter:
                 if isinstance(rq, dict) and rq.get("retrieval_hint")
             ]
             if retrieval_hints:
-                print(f"   Using {len(retrieval_hints)} retrieval hints from Query Refiner")
+                logger.info(f"   Using {len(retrieval_hints)} retrieval hints from Query Refiner")
         else:
             # Initial mode: use query candidates from Query Planner
             query_candidates = state.get("query_candidates", [])
@@ -167,31 +177,48 @@ class PlanningRetrievalRouter:
             retrieval_hints=retrieval_hints
         )
         
-        # Call LLM for execution plan (唯一的LLM调用)
-        response = self.client.beta.chat.completions.parse(
-            model=self.config.azure_deployment_name,
-            messages=[
-                {"role": "system", "content": RETRIEVAL_ROUTER_SYSTEM_MESSAGE},
-                {"role": "user", "content": prompt}
-            ],
-            response_format=RetrievalRouterDecision,
-            temperature=self.config.agent_temperature
-        )
+        # Log prompt length for debugging
+        prompt_length = len(prompt)
+        logger.info(f"   📏 Prompt length: {prompt_length} characters (~{prompt_length//4} tokens)")
+        if prompt_length > 20000:  # Warn if prompt is very long
+            logger.warning(f"   ⚠️  Very long prompt detected! This may cause token limit issues.")
+        
+        # Call LLM for execution plan (only LLM call)
+        logger.info(f"   📞 Calling LLM to generate retrieval plan...")
+        
+        try:
+            response = self.client.beta.chat.completions.parse(
+                model=self.config.azure_deployment_name,
+                messages=[
+                    {"role": "system", "content": RETRIEVAL_ROUTER_SYSTEM_MESSAGE},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format=RetrievalRouterDecision,
+                temperature=self.config.agent_temperature,
+                max_tokens=4000  # Enough for complex plans, prevents runaway generation
+            )
+            logger.info(f"   ✅ LLM plan generated successfully")
+        except Exception as e:
+            # Log the error with context
+            logger.error(f"   ❌ LLM plan generation failed: {str(e)}")
+            if "length" in str(e).lower() or "token" in str(e).lower():
+                logger.error(f"   ⚠️  Token limit exceeded. Prompt tokens: Check if refined_queries are too long.")
+            raise
         
         decision = response.choices[0].message.parsed
         
-        # Execute based on LLM's plan (Agent硬编码执行)
+        # Execute based on LLM's plan (Agent executes hardcoded logic)
         return self._execute_plan(state, decision)
     
     def _execute_plan(self, state: AgenticRAGState, decision: RetrievalRouterDecision) -> dict:
         """
-        Agent按照LLM的plan执行检索
+        Agent executes retrieval according to LLM's plan
         
-        ⚠️ 这里完全是Agent的硬编码逻辑，无LLM参与
+        ⚠️ This is entirely Agent's hardcoded logic, no LLM involvement
         
         Args:
             state: Current state
-            decision: LLM生成的执行计划
+            decision: LLM-generated execution plan
             
         Returns:
             dict: Retrieved chunks and metadata
@@ -199,14 +226,14 @@ class PlanningRetrievalRouter:
         all_results = []
         metadata = {
             "mode": "planning",
-            "retry_count": state.get("retry_count", 0),  # 始终包含 retry_count
+            "retry_count": state.get("retry_count", 0),  # Always include retry_count
             "plan_reasoning": decision.reasoning,
-            "strategies_used": [],  # 每个query用的strategy (will be set in Step 2)
+            "strategies_used": [],  # Strategy used for each query (will be set in Step 2)
             "total_chunks_retrieved": 0,
             "boost_range_results": decision.fusion_parameters.boost_range_results
         }
         
-        # Step 1: Pre-filtering (Agent执行)
+        # Step 1: Pre-filtering (Agent executes)
         range_chunk_ids = set()
         cpt_descriptions = {}  # Store CPT descriptions for query enhancement
         
@@ -230,14 +257,14 @@ class PlanningRetrievalRouter:
             metadata["range_chunks_count"] = len(range_chunk_ids)
             metadata["cpt_descriptions_used"] = cpt_descriptions
         
-        # Step 2: Execute retrieval - 每个query用其最适合的strategy (Agent执行)
+        # Step 2: Execute retrieval - Each query uses its most suitable strategy (Agent executes)
         query_candidates = state.get("query_candidates", [])
         params = decision.retrieval_parameters
-        strategies_used = []  # 记录使用的strategies
+        strategies_used = []  # Record strategies used
         per_query_stats = []  # Track detailed execution info
         
         for mapping in decision.query_strategy_mapping:
-            # 获取对应的query
+            # Get corresponding query
             query = query_candidates[mapping.query_index]
             query_text = query.get("query") if isinstance(query, dict) else query.query
             query_weight = query.get("weight", 1.0) if isinstance(query, dict) else query.weight
@@ -259,9 +286,9 @@ class PlanningRetrievalRouter:
                 "chunks_retrieved": 0
             }
             
-            # 根据每个query的strategy执行对应的检索
+            # Execute retrieval based on each query's strategy
             if strategy == "hybrid":
-                # hybrid: BM25+Semantic+RRF (融合在tools层)
+                # hybrid: BM25+Semantic+RRF (fusion at tools layer)
                 results = self.tools.hybrid_search(
                     query_text,
                     top_k=params.hybrid_top_k,
@@ -282,7 +309,7 @@ class PlanningRetrievalRouter:
                 strategies_used.append(f"q{mapping.query_index}:hybrid")
             
             elif strategy == "bm25":
-                # bm25: 纯关键词检索
+                # bm25: Pure keyword search
                 results = self.tools.bm25_search(query_text, top_k=params.bm25_top_k)
                 
                 query_stats["tools_called"].append("bm25_search")
@@ -297,7 +324,7 @@ class PlanningRetrievalRouter:
                 strategies_used.append(f"q{mapping.query_index}:bm25")
             
             elif strategy == "semantic":
-                # semantic: 纯语义检索
+                # semantic: Pure semantic search
                 results = self.tools.semantic_search(
                     query_text, 
                     top_k=params.semantic_top_k,
@@ -316,7 +343,7 @@ class PlanningRetrievalRouter:
                 strategies_used.append(f"q{mapping.query_index}:semantic")
             
             elif strategy == "bm25_semantic":
-                # bm25_semantic: 一个query同时用BM25和Semantic，保留两组结果
+                # bm25_semantic: One query uses both BM25 and Semantic, keeping both result sets
                 # BM25 retrieval
                 bm25_results = self.tools.bm25_search(query_text, top_k=params.bm25_top_k)
                 for r in bm25_results:
@@ -344,12 +371,12 @@ class PlanningRetrievalRouter:
             
             per_query_stats.append(query_stats)
         
-        metadata["strategies_used"] = strategies_used  # 记录每个query用的strategy
+        metadata["strategies_used"] = strategies_used  # Record strategy used for each query
         metadata["num_queries_executed"] = len(query_candidates)
         metadata["per_query_stats"] = per_query_stats  # Detailed execution info per query
         
-        # Step 3: Fusion按照LLM的策略 (Agent执行)
-        # 简化：直接聚合scores（已经在Step 2中应用了weights和boost）
+        # Step 3: Fusion according to LLM's strategy (Agent executes)
+        # Simplified: directly aggregate scores (weights and boost already applied in Step 2)
         aggregated_results = self._aggregate_and_rank(all_results)
         
         # Layer 2: Limit to reasonable number for Layer 3 (avoid sending too many to cross-encoder)
@@ -357,7 +384,7 @@ class PlanningRetrievalRouter:
         max_for_layer3 = 20  # Send at most 20 chunks to Layer 3 cross-encoder
         if len(aggregated_results) > max_for_layer3:
             aggregated_results = aggregated_results[:max_for_layer3]
-            print(f"\n📊 Layer 2: Truncated {len(all_results)} → {len(aggregated_results)} chunks for Layer 3")
+            logger.info(f"\n📊 Layer 2: Truncated {len(all_results)} → {len(aggregated_results)} chunks for Layer 3")
         
         # RETRY MODE: Merge chunks if retry_count > 0
         retry_count = state.get("retry_count", 0)
@@ -365,30 +392,30 @@ class PlanningRetrievalRouter:
         missing_aspects = state.get("missing_aspects", [])
         
         if retry_count > 0 and keep_chunks:
-            print(f"\n🔀 Merging chunks (Planning Mode - Round {retry_count}):")
-            print(f"   - Keep chunks (adaptive): {len(keep_chunks)}")
-            print(f"   - New chunks: {len(aggregated_results)}")
-            print(f"   - Missing aspects: {len(missing_aspects)}")
+            logger.info(f"\n🔀 Merging chunks (Planning Mode - Round {retry_count}):")
+            logger.info(f"   - Keep chunks (adaptive): {len(keep_chunks)}")
+            logger.info(f"   - New chunks: {len(aggregated_results)}")
+            logger.info(f"   - Missing aspects: {len(missing_aspects)}")
             
             # Call merge_chunks_in_retry tool
-            # 返回 15-20 merged chunks，然后传给 Evidence Judge 的 Layer 3 rerank
+            # Return 15-20 merged chunks, then pass to Evidence Judge Layer 3 rerank
             merged_results, merge_stats = self.tools.merge_chunks_in_retry(
                 keep_chunks=keep_chunks,
                 new_chunks=aggregated_results,
                 missing_aspects=missing_aspects,
                 quality_threshold=0.75,
-                top_k=20  # 返回最多 20 chunks，Evidence Judge 会 rerank 到 top 10
+                top_k=20  # Return max 20 chunks, Evidence Judge will rerank to top 10
             )
             
             final_results = merged_results
             
-            print(f"\n✅ Merge complete (Adaptive Selection):")
-            print(f"   - Final chunks for Evidence Judge: {len(final_results)}")
-            print(f"   - Kept from old (adaptive): {merge_stats.get('kept_old_chunks', 0)}")
-            print(f"   - Added from new: {merge_stats.get('added_new_chunks', 0)}")
-            print(f"   - Removed duplicates: {merge_stats.get('duplicates_removed', 0)}")
-            print(f"   - Boosted for missing aspects: {merge_stats.get('boosted_chunks', 0)}")
-            print(f"   → Evidence Judge will rerank to top 10")
+            logger.info(f"\n✅ Merge complete (Adaptive Selection):")
+            logger.info(f"   - Final chunks for Evidence Judge: {len(final_results)}")
+            logger.info(f"   - Kept from old (adaptive): {merge_stats.get('kept_old_chunks', 0)}")
+            logger.info(f"   - Added from new: {merge_stats.get('added_new_chunks', 0)}")
+            logger.info(f"   - Removed duplicates: {merge_stats.get('duplicates_removed', 0)}")
+            logger.info(f"   - Boosted for missing aspects: {merge_stats.get('boosted_chunks', 0)}")
+            logger.info(f"   → Evidence Judge will rerank to top 10")
             
             # Update metadata with merge info
             metadata.update(merge_stats)
@@ -418,20 +445,20 @@ class PlanningRetrievalRouter:
     
     def _aggregate_and_rank(self, results: List[RetrievalResult]) -> List[RetrievalResult]:
         """
-        聚合和排序检索结果（Planning层的融合）
+        Aggregate and rank retrieval results (Planning layer fusion)
         
-        处理两种情况：
-        1. Multi-query aggregation: 多个queries检索到同一chunk → 分数累加
-        2. BM25+Semantic fusion: bm25_semantic策略下，BM25和Semantic检索到同一chunk → 分数累加
+        Handles two scenarios:
+        1. Multi-query aggregation: Multiple queries retrieve same chunk → scores accumulate
+        2. BM25+Semantic fusion: Under bm25_semantic strategy, BM25 and Semantic retrieve same chunk → scores accumulate
         
-        Scores已经在Step 2中应用了：
-        - query_weight (来自 Query Planner)
-        - range_boost (来自 LLM decision)
+        Scores already applied in Step 2:
+        - query_weight (from Query Planner)
+        - range_boost (from LLM decision)
         
-        这里只需要：
-        1. 去重（同一chunk可能被多个queries或多个methods检索到）
-        2. 聚合scores（累加）
-        3. 排序
+        Here we only need to:
+        1. Deduplicate (same chunk may be retrieved by multiple queries or methods)
+        2. Aggregate scores (sum)
+        3. Sort
         
         Args:
             results: All retrieval results with weighted scores
@@ -448,7 +475,7 @@ class PlanningRetrievalRouter:
                 chunk_scores[r.chunk_id] = 0.0
                 chunk_data[r.chunk_id] = r
             
-            # Sum scores (已经包含 query_weight 和 range_boost)
+            # Sum scores (already includes query_weight and range_boost)
             chunk_scores[r.chunk_id] += r.score
         
         # Sort by aggregated score (descending)

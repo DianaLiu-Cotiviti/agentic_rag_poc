@@ -1,6 +1,6 @@
 """
-Structured Extraction Agent - 结构化提取器
-负责从证据中提取结构化答案
+Structured Extraction Agent - Structured Extractor
+Responsible for extracting structured answers from evidence
 """
 
 from pydantic import BaseModel, Field
@@ -9,45 +9,45 @@ from ..state import AgenticRAGState
 
 
 class StructuredAnswer(BaseModel):
-    """结构化答案"""
-    answer: str = Field(description="完整答案")
-    confidence_score: float = Field(ge=0, le=1, description="置信度")
-    citations: list[dict] = Field(description="引用来源")
-    reasoning: str = Field(description="推理过程")
+    """Structured answer"""
+    answer: str = Field(description="Complete answer")
+    confidence_score: float = Field(ge=0, le=1, description="Confidence level")
+    citations: list[dict] = Field(description="Citation sources")
+    reasoning: str = Field(description="Reasoning process")
 
 
 class StructuredExtractionAgent(BaseAgent):
     """
     Structured Extraction Agent
     
-    职责:
-    1. 基于证据生成完整答案
-    2. 提供引用来源
-    3. 计算置信度
-    4. 解释推理过程
+    Responsibilities:
+    1. Generate complete answer based on evidence
+    2. Provide citation sources
+    3. Calculate confidence level
+    4. Explain reasoning process
     """
     
     def process(self, state: AgenticRAGState) -> dict:
         """
-        提取结构化答案
+        Extract structured answer
         
         Args:
-            state: 包含question, retrieved_chunks的状态
+            state: State containing question and retrieved_chunks
             
         Returns:
-            dict: 包含structured_answer
+            dict: Contains structured_answer
         """
         question = state["question"]
         chunks = state.get("retrieved_chunks", [])
         
-        # 构建prompt
+        # Build prompt
         prompt = self._build_prompt(question, chunks)
         
-        # 调用LLM提取答案
+        # Call LLM to extract answer
         response = self.client.beta.chat.completions.parse(
             model=self.config.azure_deployment_name,
             messages=[
-                {"role": "system", "content": "你是医疗编码专家，基于证据提供准确答案。"},
+                {"role": "system", "content": "You are a medical coding expert providing accurate answers based on evidence."},
                 {"role": "user", "content": prompt}
             ],
             response_format=StructuredAnswer,
@@ -66,22 +66,22 @@ class StructuredExtractionAgent(BaseAgent):
         }
     
     def _build_prompt(self, question: str, chunks: list) -> str:
-        """构建Structured Extraction的prompt"""
+        """Build Structured Extraction prompt"""
         evidence = "\n\n".join([
-            f"[文档{i+1}] {chunk.get('text', '')}"
+            f"[Document {i+1}] {chunk.get('text', '')}"
             for i, chunk in enumerate(chunks)
         ])
         
-        return f"""基于以下证据回答问题：
+        return f"""Answer the question based on the following evidence:
 
-问题: {question}
+Question: {question}
 
-证据:
+Evidence:
 {evidence}
 
-请提供:
-1. 完整准确的答案
-2. 置信度分数 (0-1)
-3. 引用的文档来源
-4. 你的推理过程
+Please provide:
+1. Complete and accurate answer
+2. Confidence score (0-1)
+3. Cited document sources
+4. Your reasoning process
 """
