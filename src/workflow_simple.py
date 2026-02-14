@@ -1,18 +1,18 @@
 """
-Simple Agentic RAG Workflow - 无Iteration版本
-==============================================
+Simple Agentic RAG Workflow - Non-Iteration Version
+====================================================
 
-这是一个简化的workflow，用于验证基本的agent pipeline：
+This is a simplified workflow for validating the basic agent pipeline:
 User Query → Orchestrator → Query Planner → Retrieval Router → Evidence Judge 
          → (if sufficient) Answer Generator → END
-         → (if insufficient) END (为后续 Query Refiner 预留)
+         → (if insufficient) END (reserved for future Query Refiner)
 
-包含:
-- Evidence Judge 的 sufficiency 判断
+Features:
+- Evidence Judge sufficiency determination
 - Conditional edge: sufficient → answer, insufficient → END
-- Answer Generator: 基于 top 10 chunks 生成答案
+- Answer Generator: generates answer based on top 10 chunks
 
-用于测试每个agent是否正确连接和工作。
+Used for testing that each agent is correctly connected and functioning.
 """
 
 from typing import Dict, Any, Literal
@@ -25,20 +25,28 @@ from .agents_coordinator import AgenticRAGAgents
 from .tools.retrieval_tools import RetrievalTools
 from .tools.build_indexes import ensure_all_indexes
 from .utils.save_workflow_outputs import save_query_candidates, save_retrieved_chunks, save_final_answer
+import logging
+import sys
+logger = logging.getLogger("agenticrag.workflow_simple")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 class SimpleAgenticRAGWorkflow:
     """
-    简化的Agentic RAG Workflow
+    Simplified Agentic RAG Workflow
     
-    流程:
-    1. Orchestrator → 分析问题，选择retrieval mode
-    2. Query Planner → 生成query candidates (如果是planning mode)
-    3. Retrieval Router → 执行检索，返回top 15 chunks
-    4. Evidence Judge → 评估质量（新的chunk formatting + LLM总结）
-    5. END → 返回结果
+    Flow:
+    1. Orchestrator → Analyze question, select retrieval mode
+    2. Query Planner → Generate query candidates (if in planning mode)
+    3. Retrieval Router → Execute retrieval, return top 15 chunks
+    4. Evidence Judge → Assess quality (new chunk formatting + LLM summarization)
+    5. END → Return results
     
-    使用方法:
+    Usage:
         config = AgenticRAGConfig.from_env()
         workflow = SimpleAgenticRAGWorkflow(config)
         result = workflow.run("What is CPT code 14301?")
@@ -46,16 +54,16 @@ class SimpleAgenticRAGWorkflow:
     
     def __init__(self, config: AgenticRAGConfig = None, enable_memory: bool = True):
         """
-        初始化workflow
+        Initialize workflow
         
         Args:
-            config: 配置对象，如果为None则从环境变量加载
-            enable_memory: 是否启用memory保存功能（默认True）
+            config: Configuration object, loads from environment variables if None
+            enable_memory: Whether to enable memory saving functionality (default True)
         """
         self.config = config or AgenticRAGConfig.from_env()
         
-        # 在初始化agents之前，确保所有indexes已构建
-        print("\n🔧 Preprocessing: Ensuring all indexes are built...")
+        # Ensure all indexes are built before initializing agents
+        logger.info("\n🔧 Preprocessing: Ensuring all indexes are built...")
         ensure_all_indexes(
             chunks_path=self.config.chunks_path,
             range_index_path=self.config.range_index_path,
@@ -68,18 +76,18 @@ class SimpleAgenticRAGWorkflow:
         self.tools = RetrievalTools(self.config)
         self.graph = self._build_graph()
         
-        # Memory管理器
+        # Memory manager
         self.enable_memory = enable_memory
         if self.enable_memory:
             self.memory = WorkflowMemory(memory_dir=self.config.memory_dir)
     
     def _build_graph(self) -> StateGraph:
-        """构建LangGraph workflow"""
+        """Build LangGraph workflow"""
         
-        # 创建graph
+        # Create graph
         workflow = StateGraph(AgenticRAGState)
         
-        # 添加节点
+        # Add nodes
         workflow.add_node("orchestrator", self._orchestrator_node)
         workflow.add_node("query_planner", self._query_planner_node)
         workflow.add_node("retrieval", self._retrieval_node)
@@ -87,10 +95,10 @@ class SimpleAgenticRAGWorkflow:
         workflow.add_node("answer_generator", self._answer_generator_node)  # NEW
         workflow.add_node("query_refiner", self._query_refiner_node)  # NEW: Retry logic
         
-        # 设置入口
+        # Set entry point
         workflow.set_entry_point("orchestrator")
         
-        # 添加边
+        # Add edges
         workflow.add_edge("orchestrator", "query_planner")
         workflow.add_edge("query_planner", "retrieval")
         workflow.add_edge("retrieval", "evidence_judge")
@@ -118,53 +126,59 @@ class SimpleAgenticRAGWorkflow:
     
     def _orchestrator_node(self, state: AgenticRAGState) -> AgenticRAGState:
         """
-        Orchestrator节点
+        Orchestrator node
         
-        职责：
-        1. 分析问题类型 (cpt_code_lookup, billing_compatibility, etc.)
-        2. 选择retrieval mode (direct, planning, tool_calling)
-        3. 设置max_retry（这里不使用，但仍设置）
+        Responsibilities:
+        1. Analyze question type (cpt_code_lookup, billing_compatibility, etc.)
+        2. Select retrieval mode (direct, planning, tool_calling)
+        3. Set max_retry (not used here, but still set)
+        
+        Note: Only executed in initial round, skipped during retry
         """
-        print("\n" + "="*80)
-        print("🎯 Step 1: Orchestrator - Analyzing question...")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("🎯🎯 STEP 1: ORCHESTRATOR [ROUND 1 - INITIAL]")
+        logger.info("="*80)
         
         result = self.agents.orchestrator_node(state)
         
-        print(f"Question Type: {result.get('question_type')}")
-        print(f"Complexity: {result.get('question_complexity')}")
-        print(f"Strategy Hints: {result.get('retrieval_strategies')}")
-        print(f"Reasoning: {result.get('orchestrator_reasoning', 'N/A')[:200]}...")
+        logger.info(f"Question Type: {result.get('question_type')}")
+        logger.info(f"Complexity: {result.get('question_complexity')}")
+        logger.info(f"Strategy Hints: {result.get('retrieval_strategies')}")
+        logger.info(f"Reasoning: {result.get('orchestrator_reasoning', 'N/A')[:200]}...")
         
         state.update(result)
         return state
     
     def _query_planner_node(self, state: AgenticRAGState) -> AgenticRAGState:
         """
-        Query Planner节点
+        Query Planner node
         
-        职责：
-        1. 生成query candidates (如果是planning或tool_calling mode)
-        2. Direct mode会跳过这一步（或生成minimal queries）
-        3. 保存query candidates到output/queries
+        Responsibilities:
+        1. Generate query candidates (if in planning or tool_calling mode)
+        2. Direct mode skips this step (or generates minimal queries)
+        3. Save query candidates to output/queries
+        
+        Note: Only executed in initial round, skipped during retry
         """
-        print("\n" + "="*80)
-        print("📋 Step 2: Query Planner - Generating query candidates...")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("📋📋 STEP 2: QUERY PLANNER [ROUND 1 - INITIAL]")
+        logger.info("="*80)
         
         result = self.agents.query_planner_node(state)
         
         query_candidates = result.get('query_candidates', [])
-        print(f"Generated {len(query_candidates)} query candidates:")
         for i, qc in enumerate(query_candidates, 1):
-            # qc is a QueryCandidate object
-            query_text = qc.query if hasattr(qc, 'query') else str(qc)
-            print(f"  {i}. {query_text}")
+            # Only output sub query string
+            if isinstance(qc, dict):
+                query_text = qc.get('query', str(qc))
+            else:
+                query_text = getattr(qc, 'query', str(qc))
+            logger.info(f"  {i}. {query_text}")
         
-        # Save query candidates to output/queries
+        # Save query candidates to output/queries (silent save, no path output)
         if query_candidates:
             from .utils.save_workflow_outputs import save_query_candidates
-            saved_path = save_query_candidates(
+            save_query_candidates(
                 query_candidates=query_candidates,
                 question=state.get('question', ''),
                 output_dir=self.config.query_output_dir,
@@ -175,26 +189,30 @@ class SimpleAgenticRAGWorkflow:
                     'mode': self.config.retrieval_mode
                 }
             )
-            print(f"💾 Query candidates saved to: {saved_path}")
         
         state.update(result)
         return state
     
     def _retrieval_node(self, state: AgenticRAGState) -> AgenticRAGState:
         """
-        Retrieval Router节点
+        Retrieval Router node
         
-        职责：
-        1. 根据mode执行对应的retrieval策略
-        2. 返回top 15-20 chunks（已融合）
+        Responsibilities:
+        1. Execute corresponding retrieval strategy based on mode
+        2. Return top 15-20 chunks (already fused)
         """
-        print("\n" + "="*80)
-        print("🔍 Step 3: Retrieval Router - Executing retrieval...")
-        print("="*80)
+        retry_count = state.get("retry_count", 0)
+        max_retry = state.get("max_retry", 2)
+        total_round = retry_count + 1  # Round 1, 2, 3, ...
+        round_label = f"[ROUND {total_round} - INITIAL]" if retry_count == 0 else f"[ROUND {total_round} - RETRY #{retry_count}/{max_retry}]"
+        
+        logger.info("\n" + "="*80)
+        logger.info(f"🔍🔍 STEP 3: RETRIEVAL ROUTER {round_label}")
+        logger.info("="*80)
         
         # Mode comes from config, not from state
         mode = self.config.retrieval_mode
-        print(f"Mode: {mode}")
+        logger.info(f"Mode: {mode}")
         
         result = self.agents.retrieval_router_node(state, self.tools)
         
@@ -205,66 +223,70 @@ class SimpleAgenticRAGWorkflow:
         execution_log = metadata.get('execution_log', [])
         if execution_log:
             # Tool calling mode - show tool call details
-            print(f"\n📊 Tool Calling Execution Summary:")
-            print(f"   Total tool calls: {metadata.get('total_tool_calls', 0)}")
-            
-            print(f"\n  Detailed execution log:")
+            logger.info(f"\n📊 Tool Calling Execution Summary:")
+            logger.info(f"   Total tool calls: {metadata.get('total_tool_calls', 0)}")
+            logger.info(f"\n  Detailed execution log:")
             for i, log in enumerate(execution_log, 1):
-                print(f"    Call #{i}: {log['tool_name']}(", end="")
+                logger.info(f"    Call #{i}: {log['tool_name']}(")
                 args_str = ", ".join(f"{k}={v}" for k, v in list(log['arguments'].items())[:2])
-                print(f"{args_str}...) → {log['chunks_returned']} chunks")
+                logger.info(f"{args_str}...) → {log['chunks_returned']} chunks")
         else:
             # Planning or direct mode
             per_query_stats = metadata.get('per_query_stats', [])
             if per_query_stats:
-                print(f"\nPer-query execution details:")
+                logger.info(f"\nPer-query execution details:")
                 for stats in per_query_stats:
-                    print(f"\n  Query #{stats['query_index']}: {stats['strategy']}")
-                    print(f"    Text: {stats['query_text']}")
-                    print(f"    Weight: {stats['weight']:.2f}")
-                    print(f"    Tools called: {', '.join(stats['tools_called'])}")
-                    print(f"    Chunks retrieved: {stats['chunks_retrieved']}")
+                    logger.info(f"\n  Query #{stats['query_index']}: {stats['strategy']}")
+                    logger.info(f"    Text: {stats['query_text']}")
+                    logger.info(f"    Weight: {stats['weight']:.2f}")
+                    logger.info(f"    Tools called: {', '.join(stats['tools_called'])}")
+                    logger.info(f"    Chunks retrieved: {stats['chunks_retrieved']}")
             else:
                 # Direct mode - just show strategies
                 strategies_used = metadata.get('strategies_used', [])
                 if strategies_used:
-                    print(f"\nStrategies executed:")
+                    logger.info(f"\nStrategies executed:")
                     for strategy in strategies_used:
-                        print(f"  • {strategy}")
+                        logger.info(f"  • {strategy}")
         
-        print(f"\nFinal results:")
-        print(f"  Retrieved chunks: {len(chunks)}")
+        logger.info(f"\nFinal results:")
+        logger.info(f"  Retrieved chunks: {len(chunks)}")
         if chunks:
-            print(f"  Top chunk score: {chunks[0].score:.4f}")
-            print(f"  Lowest chunk score: {chunks[-1].score:.4f}")
+            logger.info(f"  Top chunk score: {chunks[0].score:.4f}")
+            logger.info(f"  Lowest chunk score: {chunks[-1].score:.4f}")
         
         state.update(result)
         return state
     
     def _evidence_judge_node(self, state: AgenticRAGState) -> AgenticRAGState:
         """
-        Evidence Judge节点
+        Evidence Judge node
         
-        职责：
-        1. 使用新的三层chunk formatting策略
-        2. LLM批量总结截断部分
-        3. 评估coverage, specificity
-        4. 返回is_sufficient判断
+        Responsibilities:
+        1. Use new three-layer chunk formatting strategy
+        2. LLM batch summarization for truncated parts
+        3. Assess coverage, specificity
+        4. Return is_sufficient judgment
         """
-        print("\n" + "="*80)
-        print("⚖️  Step 4: Evidence Judge - Assessing evidence quality...")
-        print("="*80)
+        retry_count = state.get("retry_count", 0)
+        max_retry = state.get("max_retry", 2)
+        total_round = retry_count + 1  # Round 1, 2, 3, ...
+        round_label = f"[ROUND {total_round} - INITIAL]" if retry_count == 0 else f"[ROUND {total_round} - RETRY #{retry_count}/{max_retry}]"
+        
+        logger.info("\n" + "="*80)
+        logger.info(f"⚖️⚖️  STEP 4: EVIDENCE JUDGE {round_label}")
+        logger.info("="*80)
         
         result = self.agents.evidence_judge_node(state)
         
         assessment = result.get('evidence_assessment', {})
-        print(f"Is Sufficient: {assessment.get('is_sufficient')}")
-        print(f"Coverage Score: {assessment.get('coverage_score', 0):.2f}")
-        print(f"Specificity Score: {assessment.get('specificity_score', 0):.2f}")
-        print(f"Has Contradiction: {assessment.get('has_contradiction')}")
+        logger.info(f"Is Sufficient: {assessment.get('is_sufficient')}")
+        logger.info(f"Coverage Score: {assessment.get('coverage_score', 0):.2f}")
+        logger.info(f"Specificity Score: {assessment.get('specificity_score', 0):.2f}")
+        logger.info(f"Has Contradiction: {assessment.get('has_contradiction')}")
         if assessment.get('missing_aspects'):
-            print(f"Missing Aspects: {assessment.get('missing_aspects')}")
-        print(f"\nReasoning:\n{assessment.get('reasoning', 'N/A')[:300]}...")
+            logger.info(f"Missing Aspects: {assessment.get('missing_aspects')}")
+        logger.info(f"\nReasoning:\n{assessment.get('reasoning', 'N/A')[:300]}...")
         
         state.update(result)
         return state
@@ -274,24 +296,24 @@ class SimpleAgenticRAGWorkflow:
         state: AgenticRAGState
     ) -> Literal["answer", "retry", "end"]:
         """
-        Conditional edge: 决定是否生成答案、重试、或结束
+        Conditional edge: Determine whether to generate answer, retry, or end
         
         Decision Logic by Mode:
         
         **Direct Mode** (0 LLM calls):
-        - 直接生成答案，不判断 sufficiency，不retry
-        - 理由: Direct mode 已经使用固定的 hybrid+RRF 策略，结果稳定可靠
+        - Generate answer directly, no sufficiency check, no retry
+        - Rationale: Direct mode uses fixed hybrid+RRF strategy, results are stable and reliable
         
         **Planning Mode** (1 LLM call):
-        - 判断 evidence sufficiency
-        - If sufficient → "answer" (进入 Answer Generator)
-        - If insufficient + retry < max → "retry" (进入 Query Refiner)
+        - Check evidence sufficiency
+        - If sufficient → "answer" (go to Answer Generator)
+        - If insufficient + retry < max → "retry" (go to Query Refiner)
         - If insufficient + retry >= max → "end"
         
         **Tool Calling Mode** (5-15 LLM calls):
-        - 判断 evidence sufficiency
-        - If sufficient → "answer" (进入 Answer Generator)
-        - If insufficient + retry < max → "retry" (进入 Query Refiner)
+        - Check evidence sufficiency
+        - If sufficient → "answer" (go to Answer Generator)
+        - If insufficient + retry < max → "retry" (go to Query Refiner)
         - If insufficient + retry >= max → "end"
         
         Args:
@@ -304,18 +326,18 @@ class SimpleAgenticRAGWorkflow:
         retrieval_metadata = state.get("retrieval_metadata", {})
         mode = retrieval_metadata.get("mode", self.config.retrieval_mode)
         
-        # Direct mode: 直接生成答案，不判断 sufficiency，不retry
+        # Direct mode: generate answer directly, no sufficiency check, no retry
         if mode == "direct":
-            print("\n✅ Direct Mode: Skipping sufficiency check → Proceeding to Answer Generator")
-            print("   (Direct mode uses stable hybrid+RRF strategy, always generates answer)")
+            logger.info("\n✅ Direct Mode: Skipping sufficiency check → Proceeding to Answer Generator")
+            logger.info("   (Direct mode uses stable hybrid+RRF strategy, always generates answer)")
             return "answer"
         
-        # Planning & Tool Calling modes: 判断 sufficiency + retry logic
+        # Planning & Tool Calling modes: check sufficiency + retry logic
         assessment = state.get("evidence_assessment")
         
         # Safety check
         if not assessment:
-            print(f"\n⚠️  No evidence assessment found for {mode} mode, ending workflow")
+            logger.info(f"\n⚠️  No evidence assessment found for {mode} mode, ending workflow")
             return "end"
         
         is_sufficient = assessment.get("is_sufficient", False)
@@ -323,159 +345,91 @@ class SimpleAgenticRAGWorkflow:
         max_retry = state.get("max_retry", 2)  # Default max_retry = 2
         
         if is_sufficient:
-            print(f"\n✅ {mode.title()} Mode: Evidence is SUFFICIENT → Proceeding to Answer Generator")
+            logger.info(f"\n✅ {mode.title()} Mode: Evidence is SUFFICIENT → Proceeding to Answer Generator")
             if retry_count > 0:
-                print(f"   (Achieved sufficiency after {retry_count} retry rounds)")
+                logger.info(f"   (Achieved sufficiency after {retry_count} retry rounds)")
             return "answer"
         
         # Evidence is insufficient
         if retry_count >= max_retry:
-            print(f"\n❌ {mode.title()} Mode: Evidence is INSUFFICIENT + Max retries reached ({retry_count}/{max_retry})")
-            print("   → Ending workflow")
+            logger.info(f"\n❌ {mode.title()} Mode: Evidence is INSUFFICIENT + Max retries reached ({retry_count}/{max_retry})")
+            logger.info("   → Ending workflow")
             return "end"
         
         # Can retry
-        print(f"\n🔄 {mode.title()} Mode: Evidence is INSUFFICIENT → Retry {retry_count + 1}/{max_retry}")
-        print(f"   Missing aspects: {len(state.get('missing_aspects', []))}")
+        logger.info(f"\n🔄 {mode.title()} Mode: Evidence is INSUFFICIENT → Retry {retry_count + 1}/{max_retry}")
+        logger.info(f"   Missing aspects: {len(state.get('missing_aspects', []))}")
         return "retry"
     
     def _query_refiner_node(self, state: AgenticRAGState) -> AgenticRAGState:
         """
-        Query Refiner节点
+        Query Refiner node
         
-        职责:
+        Responsibilities:
         1. Analyze missing_aspects from Evidence Judge
         2. Generate refined queries targeting specific gaps
         3. Select top 3 chunks to preserve (keep_chunks)
         4. Increment retry_count
         """
-        print("\n" + "="*80)
-        print("🔄 Step X: Query Refiner - Generating refined queries for retry...")
-        print("="*80)
+        retry_count = state.get("retry_count", 0)
+        max_retry = state.get("max_retry", 2)  # Default max_retry = 2
+        current_retry = retry_count + 1  # This is the retry being executed now
+        total_round = current_retry + 1  # Round 2, 3, 4, ... (after initial Round 1)
+        
+        logger.info("\n" + "#"*80)
+        logger.info(f"🔄🔄 ROUND {total_round} - RETRY #{current_retry}/{max_retry} - QUERY REFINER")
+        logger.info("#"*80)
         
         result = self.agents.query_refiner_node(state)
         
         refined_queries = result.get('refined_queries', [])
-        print(f"\n✅ Generated {len(refined_queries)} refined queries")
+        logger.info(f"\n✅ Generated {len(refined_queries)} refined queries")
         for i, rq in enumerate(refined_queries, 1):
-            print(f"   {i}. {rq.get('query', 'N/A')[:100]}")
+            logger.info(f"   {i}. {rq.get('query', 'N/A')[:100]}")
         
         keep_chunks = result.get('keep_chunks', [])
-        print(f"\n📦 Preserving {len(keep_chunks)} top chunks for merge")
-        
-        retry_count = result.get('retry_count', 0)
-        print(f"🔄 Retry count: {retry_count}")
+        logger.info(f"\n📦 Preserving {len(keep_chunks)} top chunks for merge")
         
         state.update(result)
         return state
     
-    def _should_generate_answer_OLD_REMOVED(self, state: AgenticRAGState) -> Literal["generate", "end"]:
-        """
-        OLD VERSION - REPLACED BY _should_retry_or_answer
-        
-        Conditional edge: 判断是否生成答案（根据 mode 采用不同策略）
-        
-        Decision Logic by Mode:
-        
-        **Direct Mode** (0 LLM calls):
-        - 直接生成答案，不判断 sufficiency
-        - 理由: Direct mode 已经使用固定的 hybrid+RRF 策略，结果稳定可靠
-        
-        **Planning Mode** (1 LLM call):
-        - 判断 evidence sufficiency
-        - If sufficient → "generate" (进入 Answer Generator)
-        - If insufficient → "end" (TODO: 添加 Query Refiner retry)
-        
-        **Tool Calling Mode** (5-15 LLM calls):
-        - 判断 evidence sufficiency
-        - If sufficient → "generate" (进入 Answer Generator)
-        - If insufficient → "end" (TODO: 添加 Query Refiner retry)
-        
-        Args:
-            state: Current state with evidence_assessment and retrieval_metadata
-            
-        Returns:
-            "generate" or "end"
-        """
-        # Get retrieval mode from metadata
-        retrieval_metadata = state.get("retrieval_metadata", {})
-        mode = retrieval_metadata.get("mode", self.config.retrieval_mode)
-        
-        # Direct mode: 直接生成答案，不判断 sufficiency
-        if mode == "direct":
-            print("\n✅ Direct Mode: Skipping sufficiency check → Proceeding to Answer Generator")
-            print("   (Direct mode uses stable hybrid+RRF strategy, always generates answer)")
-            return "generate"
-        
-        # Planning & Tool Calling modes: 判断 sufficiency
-        assessment = state.get("evidence_assessment")
-        
-        # Safety check
-        if not assessment:
-            print(f"\n⚠️  No evidence assessment found for {mode} mode, ending workflow")
-            return "end"
-        
-        is_sufficient = assessment.get("is_sufficient", False)
-        
-        if is_sufficient:
-            print(f"\n✅ {mode.title()} Mode: Evidence is SUFFICIENT → Proceeding to Answer Generator")
-            return "generate"
-        else:
-            print(f"\n❌ {mode.title()} Mode: Evidence is INSUFFICIENT → Ending workflow")
-            print("   (Query Refiner retry will be added in future iteration)")
-            return "end"
-    
     def _answer_generator_node(self, state: AgenticRAGState) -> AgenticRAGState:
         """
-        Answer Generator节点
+        Answer Generator node
         
-        职责:
-        1. 接收 top 10 chunks (validated as sufficient)
-        2. 基于 original question 生成答案
-        3. 返回 final_answer (with citations, key_points, confidence)
+        Responsibilities:
+        1. Receive top 10 chunks (validated as sufficient)
+        2. Generate answer based on original question
+        3. Return final_answer (with citations, key_points, confidence)
+        
+        Note: May execute in any round (once evidence is sufficient)
         """
-        print("\n" + "="*80)
-        print("💬 Step 5: Answer Generator - Generating final answer...")
-        print("="*80)
+        retry_count = state.get("retry_count", 0)
+        max_retry = state.get("max_retry", 2)
+        total_round = retry_count + 1  # Round 1, 2, 3, ...
+        round_label = f"[ROUND {total_round} - INITIAL]" if retry_count == 0 else f"[ROUND {total_round} - RETRY #{retry_count}/{max_retry} SUCCESS]"
         
+        logger.info("\n" + "="*80)
+        logger.info(f"💬💬 STEP 5: ANSWER GENERATOR {round_label}")
+        logger.info("="*80)
+        logger.info("Calling answer_generator_node...")
         result = self.agents.answer_generator_node(state)
-        
         final_answer = result.get('final_answer', {})
-        print(f"\n📝 Generated Answer:")
-        print(f"{final_answer.get('answer', 'N/A')[:500]}...")
-        
-        if final_answer.get('key_points'):
-            print(f"\n🔑 Key Points:")
-            for i, point in enumerate(final_answer.get('key_points', [])[:5], 1):
-                print(f"   {i}. {point}")
-        
-        citation_map = final_answer.get('citation_map', {})
-        print(f"\n📚 Citations: {len(citation_map)} chunks referenced")
-        if citation_map:
-            print(f"   Citation mapping: [1]-[{max(citation_map.keys())}] → {len(citation_map)} chunks")
-        print(f"🎯 Confidence: {final_answer.get('confidence', 0):.2f}")
-        
         if final_answer.get('limitations'):
-            print(f"\n⚠️  Limitations:")
-            for limitation in final_answer.get('limitations', []):
-                print(f"   • {limitation}")
-        
-        # 保存Answer Generator的输出到 output/responses/
+            logger.info(f"Limitations: {final_answer.get('limitations')}")
+        # Save Answer Generator output to output/responses/
         retrieval_metadata = state.get('retrieval_metadata', {})
         metadata = {
             'mode': retrieval_metadata.get('mode', self.config.retrieval_mode),
             'num_chunks': len(state.get('retrieved_chunks', [])),
             'is_sufficient': state.get('evidence_assessment', {}).get('is_sufficient', True)
         }
-        
         save_path = save_final_answer(
             final_answer=final_answer,
             question=state.get('question', ''),
             output_dir=self.config.response_output_dir,
             metadata=metadata
         )
-        print(f"\n💾 Final answer saved to: {save_path}")
-        
         state.update(result)
         return state
     
@@ -483,67 +437,145 @@ class SimpleAgenticRAGWorkflow:
     
     def run(self, question: str, cpt_code: int = None, context: str = None) -> Dict[str, Any]:
         """
-        运行简化的workflow
-        
-        Args:
-            question: 用户问题
-            cpt_code: 可选的CPT code（用于range filtering）
-            context: 可选的上下文
-            
-        Returns:
-            Dict: 包含完整的state信息
+        Run simplified workflow, supports retry_rounds aggregation for UI display, and records log_text for each round
         """
-        print("\n" + "🚀" + "="*78 + "🚀")
-        print("Starting Simple Agentic RAG Workflow (No Iteration)")
-        print("🚀" + "="*78 + "🚀")
-        print(f"\nQuestion: {question}")
+        import io
+        import contextlib
+        log_buffer = io.StringIO()
+        def get_log():
+            return log_buffer.getvalue()
+
+        logger.info("\n" + "🚀" + "="*78 + "🚀")
+        logger.info("Starting Agentic RAG Workflow")
+        logger.info("🚀" + "="*78 + "🚀")
+        logger.info(f"\nQuestion: {question}")
         if cpt_code:
-            print(f"CPT Code: {cpt_code}")
-        
-        # 初始化state
-        initial_state = AgenticRAGState(
+            logger.info(f"CPT Code: {cpt_code}")
+
+        # Initialize state
+        state = AgenticRAGState(
             question=question,
             cpt_code=cpt_code,
             context=context,
         )
-        
-        # 运行graph
-        final_state = self.graph.invoke(initial_state)
-        
-        print("\n" + "✅" + "="*78 + "✅")
-        print("Workflow completed successfully!")
-        print("✅" + "="*78 + "✅")
-        
-        # 保存到memory
+
+        retry_rounds = []
+        max_retry = 2
+        retry_count = 0
+        mode = self.config.retrieval_mode
+        finished = False
+        last_log_pos = 0
+        # Temporarily redirect logger's handler to log_buffer to ensure UI captures all logger.info
+        old_handlers = logger.handlers[:]
+        stream_handler = logging.StreamHandler(log_buffer)
+        stream_handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.handlers = [stream_handler]
+        try:
+            while not finished:
+                # 1. Orchestrator (only executed in initial round)
+                if retry_count == 0:
+                    state = self._orchestrator_node(state)
+                # 2. Query Planner (only executed in initial round)
+                if retry_count == 0:
+                    state = self._query_planner_node(state)
+                    # Set log start position after initial round to avoid retry_rounds including STEP 1/2
+                    if mode in ["planning", "tool_calling"]:
+                        cur_log = get_log()
+                        last_log_pos = len(cur_log)
+                # 3. Retrieval (executed every time)
+                state = self._retrieval_node(state)
+
+                if mode == "direct":
+                    # Direct mode: retrieval → evidence_judge → answer_generator
+                    state = self._evidence_judge_node(state)
+                    state = self._answer_generator_node(state)
+                    finished = True
+                    continue
+
+                # 4. Evidence Judge
+                state = self._evidence_judge_node(state)
+                assessment = state.get("evidence_assessment", {})
+                is_sufficient = assessment.get("is_sufficient", False)
+
+                # Only record retry_rounds in planning/tool_calling when evidence is insufficient
+                if mode in ["planning", "tool_calling"] and (retry_count > 0 or not is_sufficient):
+                    cur_log = get_log()
+                    retry_log = cur_log[last_log_pos:]
+                    retry_rounds.append({
+                        "log_text": retry_log,
+                        "query_refiner_output": state.get("refined_queries"),
+                        "retrieval_router_output": state.get("retrieved_chunks"),
+                        "evidence_judge_output": assessment,
+                        "answer_generator_output": None  # Only present when sufficient
+                    })
+                    last_log_pos = len(cur_log)
+
+                if is_sufficient:
+                    # 5. Answer Generator
+                    state = self._answer_generator_node(state)
+                    # Record answer_generator_output in the last retry round (only for planning/tool_calling)
+                    if mode in ["planning", "tool_calling"] and retry_rounds:
+                        retry_rounds[-1]["answer_generator_output"] = state.get("final_answer")
+                        # Record this round's log
+                        cur_log = get_log()
+                        retry_log = cur_log[last_log_pos:]
+                        retry_rounds[-1]["log_text"] = retry_log
+                    finished = True
+                else:
+                    retry_count = state.get("retry_count", retry_count)
+                    if retry_count >= max_retry:
+                        finished = True
+                    else:
+                        # Enter retry, call Query Refiner
+                        state = self._query_refiner_node(state)
+        finally:
+            logger.handlers = old_handlers
+        # Aggregate retry_rounds to final result
+        result = dict(state)
+        if retry_rounds:
+            result["retry_rounds"] = retry_rounds
+        # Global log_text
+        result["log_text"] = log_buffer.getvalue()
+        # Add mode to result
+        result["retrieval_mode"] = mode
+        # Ensure final_answer field exists in direct mode
+        if mode == "direct" and "final_answer" not in result:
+            result["final_answer"] = state.get("final_answer")
+
+        logger.info("\n" + "✅" + "="*78 + "✅")
+        logger.info("Workflow completed successfully!")
+        logger.info("✅" + "="*78 + "✅")
+
+        # Save to memory
         if self.enable_memory:
             try:
                 saved_path = self.memory.save_execution(
                     question=question,
-                    final_state=final_state,
+                    final_state=result,
                     workflow_type="simple",
                     mode=self.config.retrieval_mode,
                     success=True
                 )
-                print(f"\n💾 Workflow result saved to: {saved_path}")
+                logger.info(f"\n💾 Workflow result saved to: {saved_path}")
             except Exception as e:
-                print(f"\n⚠️  Failed to save memory: {e}")
-        
-        return final_state
+                logger.info(f"\n⚠️  Failed to save memory: {e}")
+
+        return result
     
     def visualize(self, output_path: str = "workflow_simple.png"):
         """
-        可视化workflow graph
+        Visualize workflow graph
         
         Args:
-            output_path: 输出图片路径
+            output_path: Output image path
         """
         try:
             from IPython.display import Image, display
             display(Image(self.graph.get_graph().draw_mermaid_png()))
         except:
-            print("Visualization requires IPython. Saving to file instead...")
-            # 保存到文件
+            logger.info("Visualization requires IPython. Saving to file instead...")
+            # Save to file
             graph_image = self.graph.get_graph().draw_mermaid_png()
             with open(output_path, "wb") as f:
                 f.write(graph_image)
-            print(f"Graph saved to {output_path}")
+            logger.info(f"Graph saved to {output_path}")
